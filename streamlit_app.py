@@ -3,8 +3,14 @@ import streamlit as st
 import tempfile
 import os
 import httpx
-# Import all backend logic from the separate utility file
-from pptx_utils import create_presentation_from_markdown, extract_content_with_docling, DOCLING_AVAILABLE
+# Import core backend functions, including the hardcoded key variable
+from pptx_utils import (
+    create_presentation_from_markdown, 
+    extract_content_with_docling, 
+    generate_structured_markdown,
+    DOCLING_AVAILABLE,
+    HARDCODED_GEMINI_API_KEY # <-- Imported for status check
+)
 
 # --- Streamlit Session State & Logic ---
 
@@ -12,9 +18,11 @@ def init_session_state():
     """Initialize Streamlit session state variables."""
     if 'markdown_content' not in st.session_state:
         st.session_state['markdown_content'] = ""
+    if 'raw_extracted_content' not in st.session_state:
+        st.session_state['raw_extracted_content'] = ""
 
 def import_file_content(uploaded_file, page_range):
-    """Processes an uploaded file by saving to temp and extracting content."""
+    """Processes an uploaded file by saving to temp and extracting content to RAW state."""
     if uploaded_file is None:
         st.error("Please upload a file first.")
         return
@@ -24,8 +32,7 @@ def import_file_content(uploaded_file, page_range):
 
     try:
         with st.spinner(f"Importing and extracting content from **{uploaded_file.name}**..."):
-            # Write the UploadedFile content to the temporary file
-            uploaded_file.seek(0) # Rewind buffer
+            uploaded_file.seek(0)
             file_bytes = uploaded_file.read()
             with open(temp_path, "wb") as f:
                 f.write(file_bytes)
@@ -33,8 +40,9 @@ def import_file_content(uploaded_file, page_range):
             content = extract_content_with_docling(temp_path, page_range=page_range or None)
             
             if content:
-                st.session_state['markdown_content'] = content
-                st.success("Content extracted and loaded into editor.")
+                st.session_state['raw_extracted_content'] = content
+                st.session_state['markdown_content'] = "" 
+                st.success("✅ Raw content extracted successfully. Ready for AI generation (Step 2).")
             else:
                 st.warning("Content extraction resulted in an empty result.")
             
@@ -46,7 +54,7 @@ def import_file_content(uploaded_file, page_range):
             os.unlink(temp_path)
 
 def import_from_url(url, page_range):
-    """Downloads content from URL, saves to temp, and extracts."""
+    """Downloads content from URL, saves to temp, and extracts to RAW state."""
     if not url:
         st.error("Please enter a URL.")
         return
@@ -54,24 +62,21 @@ def import_from_url(url, page_range):
     temp_path = None
     try:
         with st.spinner(f"Downloading and extracting content from **{url}**..."):
-            # 1. Download
             with httpx.Client(follow_redirects=True, timeout=15.0) as client:
                 response = client.get(url)
                 response.raise_for_status()
 
-                # 2. Save to temporary file
                 suffix = os.path.splitext(url.split('?')[0])[1] or '.tmp'
                 temp_path = os.path.join(tempfile.gettempdir(), next(tempfile._get_candidate_names()) + suffix)
                 with open(temp_path, "wb") as temp_file:
                     temp_file.write(response.content)
 
-            # 3. Extract content
             content = extract_content_with_docling(temp_path, page_range=page_range or None)
             
-            # 4. Update state
             if content:
-                st.session_state['markdown_content'] = content
-                st.success("Content downloaded, extracted, and loaded into editor.")
+                st.session_state['raw_extracted_content'] = content
+                st.session_state['markdown_content'] = "" 
+                st.success("✅ Raw content extracted successfully. Ready for AI generation (Step 2).")
             else:
                 st.warning("Content extraction resulted in an empty result.")
 
@@ -85,36 +90,58 @@ def import_from_url(url, page_range):
             os.unlink(temp_path)
 
 
+def generate_slides_content():
+    """Orchestrates the LLM generation step."""
+    raw_content = st.session_state.get('raw_extracted_content', '')
+    if not raw_content or len(raw_content) < 50:
+        st.error("Please import content in Step 1 first (minimum 50 characters).")
+        return
+
+    with st.spinner("🤖 Generating structured slide content using Gemini..."):
+        try:
+            # Calls the function in pptx_utils.py (Real LLM call or Mock fallback)
+            structured_markdown = generate_structured_markdown(raw_content)
+            
+            st.session_state['markdown_content'] = structured_markdown
+            
+            if "Gemini API Error" in structured_markdown or "General Error" in structured_markdown:
+                st.error("AI Generation Failed. Check the content in Step 3 for details.")
+            elif "MOCK" in structured_markdown:
+                st.warning("⚠️ Using Mock Content. Please insert your key into the `HARDCODED_GEMINI_API_KEY` variable in `pptx_utils.py` for real generation.")
+            else:
+                st.success("🎉 Structured Markdown generated and loaded into the editor (Step 3).")
+                
+        except Exception as e:
+            st.error(f"AI Generation Failed: {e}")
+            st.exception(e)
+
+
 def main_app_ui():
-    """Main Streamlit UI based on gui2.py single-document flow."""
     
     st.set_page_config(page_title="Presentation Generator", layout="wide")
-    st.title("📄 Markdown to PowerPoint Generator")
-    st.caption("Import document content via file upload or URL, edit the resulting Markdown, and generate a PPTX presentation.")
+    st.title("📄 Gemini-Powered Presentation Generator")
     
     if not DOCLING_AVAILABLE:
         st.warning(
-            "⚠️ **`docling` or Tesseract is missing.** "
-            "Content extraction from files/URLs is currently **mocked** to allow testing the PPTX generation flow. "
-            "Install required packages for full functionality."
+            "⚠️ **Content Extraction is Mocked.** The `docling` library or its Tesseract dependency "
+            "was not fully available. Extraction results will use mock data."
         )
     
-    # --- 1. Import Content (Using st.form for grouping) ---
-    st.header("1. Import Document Content")
+    # --- 1. Import Content ---
+    st.header("1. Extract Raw Document Content")
     
     with st.form(key='import_form'):
-        
         col_url, col_range = st.columns([3, 1])
         with col_url:
-            url_input = st.text_input("URL:", key="url_input", help="Enter the direct link to a document (PDF, DOCX, etc.).")
+            url_input = st.text_input("URL:", key="url_input", help="Enter link to a document.")
         with col_range:
-            range_input = st.text_input("Page Range:", key="range_input", help="e.g., 1-5, 2,4 (1-indexed)")
+            range_input = st.text_input("Page Range:", key="range_input", help="e.g., 1-5")
 
         st.markdown("---")
         
         uploaded_file = st.file_uploader(
-            "Upload Document (If used, URL input is ignored for this action):", 
-            type=['pdf', 'docx', 'doc', 'txt', 'epub', 'html'], 
+            "Upload Document (e.g., PDF, DOCX):", 
+            type=['pdf', 'docx', 'doc', 'txt'], 
             key="file_uploader_main"
         )
         
@@ -122,13 +149,11 @@ def main_app_ui():
 
         col_buttons = st.columns(2)
         
-        # Streamlit forms require submit buttons to trigger the action
-        submit_url = col_buttons[0].form_submit_button("Import from URL", type="primary")
-        submit_file = col_buttons[1].form_submit_button("Import Uploaded File", type="secondary")
+        submit_file = col_buttons[0].form_submit_button("Import Uploaded File", type="primary")
+        submit_url = col_buttons[1].form_submit_button("Import from URL", type="primary")
 
         if submit_file:
             if uploaded_file:
-                # We need to re-read the uploaded file as form submission consumes the buffer
                 import_file_content(uploaded_file, range_input)
             else:
                 st.error("Please upload a file before clicking 'Import Uploaded File'.")
@@ -141,9 +166,29 @@ def main_app_ui():
         
     st.markdown("##") 
 
-    # --- 2. Presentation Content (Editable Markdown) ---
-    st.header("2. Presentation Content (Editable Markdown)")
-    st.caption("Edit the content below. Use Markdown list syntax for bullets and '---' to separate slides.")
+    # --- 2. LLM Generation Step ---
+    st.header("2. Generate Structured Slides from Raw Content")
+    
+    raw_content_len = len(st.session_state.get('raw_extracted_content', ''))
+    
+    # Status check using the hardcoded key
+    if HARDCODED_GEMINI_API_KEY != "YOUR_HARDCODED_GEMINI_API_KEY_HERE":
+        st.success("🔑 Gemini API Key found in `pptx_utils.py`. Real AI generation is active.")
+    else:
+        st.warning("⚠️ **API Key MISSING or is the placeholder.** Generation will use mock content. Please insert your key into the `HARDCODED_GEMINI_API_KEY` variable in `pptx_utils.py`.")
+    
+    if raw_content_len > 0:
+        st.info(f"Raw content of **{raw_content_len}** characters is ready for processing.")
+        if st.button("🚀 Generate Structured Slides with Gemini", type="secondary", key="generate_ai_content_btn"):
+            generate_slides_content()
+    else:
+        st.info("Import content in Step 1 to enable AI generation.")
+
+    st.markdown("---") 
+
+    # --- 3. Presentation Content (Editable Markdown) ---
+    st.header("3. Final Slide Markdown (Editable)")
+    st.caption("Review and edit the structured Markdown before final PPTX creation. Use `#` for slide title and `---` to separate slides.")
     
     markdown_content = st.text_area(
         "Edit Content:", 
@@ -153,13 +198,13 @@ def main_app_ui():
     )
     st.session_state['markdown_content'] = markdown_content
 
-    # --- 3. Generate Presentation ---
-    st.header("3. Generate Presentation")
+    # --- 4. Generate Presentation ---
+    st.header("4. Generate Presentation")
     
-    if st.button("Generate Presentation (.pptx)", type="primary", key="generate_btn_final"):
+    if st.button("Generate Final PPTX", type="primary", key="generate_btn_final"):
         content = st.session_state['markdown_content']
         if not content.strip():
-            st.error("The content editor is empty. Please import or type content.")
+            st.error("The slide content editor (Step 3) is empty.")
             return
         
         temp_output_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pptx")
@@ -179,10 +224,10 @@ def main_app_ui():
                 file_name="generated_presentation.pptx",
                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 key="download_button_final",
-                type="success"
+                type="secondary"
             )
             st.balloons()
-            st.success("Presentation created successfully! Click the download button above.")
+            st.success("Presentation created successfully!")
             
         except Exception as e:
             st.error(f"Failed to generate presentation: {e}")
