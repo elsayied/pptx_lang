@@ -16,8 +16,9 @@ from pptx_utils import (
 
 def init_session_state():
     """Initialize Streamlit session state variables."""
-    if 'markdown_content' not in st.session_state:
-        st.session_state['markdown_content'] = ""
+    # The 'markdown_editor' key holds the content displayed in the text area (Step 3).
+    if 'markdown_editor' not in st.session_state:
+        st.session_state['markdown_editor'] = ""
     if 'raw_extracted_content' not in st.session_state:
         st.session_state['raw_extracted_content'] = ""
 
@@ -41,7 +42,7 @@ def import_file_content(uploaded_file, page_range):
             
             if content:
                 st.session_state['raw_extracted_content'] = content
-                st.session_state['markdown_content'] = "" 
+                st.session_state['markdown_editor'] = "" # Clear generated content
                 st.success("✅ Raw content extracted successfully. Ready for AI generation (Step 2).")
             else:
                 st.warning("Content extraction resulted in an empty result.")
@@ -75,7 +76,7 @@ def import_from_url(url, page_range):
             
             if content:
                 st.session_state['raw_extracted_content'] = content
-                st.session_state['markdown_content'] = "" 
+                st.session_state['markdown_editor'] = "" # Clear generated content
                 st.success("✅ Raw content extracted successfully. Ready for AI generation (Step 2).")
             else:
                 st.warning("Content extraction resulted in an empty result.")
@@ -101,7 +102,8 @@ def generate_slides_content():
         try:
             structured_markdown = generate_structured_markdown(raw_content)
             
-            st.session_state['markdown_content'] = structured_markdown
+            # --- FIX: Update the widget's internal state key directly ---
+            st.session_state['markdown_editor'] = structured_markdown
             
             if "Gemini API Error" in structured_markdown or "General Error" in structured_markdown:
                 st.error("AI Generation Failed. Check the content in Step 3 for details.")
@@ -143,7 +145,6 @@ def main_app_ui():
     with col_file_range:
         file_range_input = st.text_input("Page Range:", key="file_range_input_main", help="e.g., 1-5")
     
-    # Button to trigger the file import logic
     if st.button("Import Uploaded File", type="primary", key="file_import_button_final"):
         if uploaded_file:
             import_file_content(uploaded_file, file_range_input)
@@ -195,19 +196,21 @@ def main_app_ui():
     st.header("3. Final Slide Markdown (Editable)")
     st.caption("Review and edit the structured Markdown before final PPTX creation. Use `#` for slide title and `---` to separate slides.")
     
-    markdown_content = st.text_area(
+    # --- FIX: Read and write is handled by the widget key binding ---
+    st.text_area(
         "Edit Content:", 
-        st.session_state.get('markdown_content', ''), 
+        value=st.session_state.get('markdown_editor', ''), 
         height=500,
-        key="markdown_editor"
+        key="markdown_editor" # <--- The source of truth for the entire app content
     )
-    st.session_state['markdown_content'] = markdown_content
 
     # --- 4. Generate Presentation ---
     st.header("4. Generate Presentation")
     
     if st.button("Generate Final PPTX", type="primary", key="generate_btn_final"):
-        content = st.session_state['markdown_content']
+        # --- FIX: Read the final content directly from the widget's session state key ---
+        content = st.session_state['markdown_editor']
+        
         if not content.strip():
             st.error("The slide content editor (Step 3) is empty.")
             return
