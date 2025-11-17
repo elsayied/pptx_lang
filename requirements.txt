@@ -1,4 +1,3 @@
-ttkbootstrap
 docling
 httpx
 google-generativeai
