@@ -4,6 +4,13 @@ from pptx.util import Inches
 from typing import List, Dict
 import re
 import os
+import google.generativeai as genai
+from google.generativeai.errors import APIError
+
+# --- HARDCODED API KEY (SECURITY WARNING: DO NOT USE IN PUBLIC REPOSITORIES) ---
+# ⚠️ REPLACE THE PLACEHOLDER BELOW WITH YOUR ACTUAL GEMINI API KEY ⚠️
+HARDCODED_GEMINI_API_KEY = "YOUR_HARDCODED_GEMINI_API_KEY_HERE"
+# ---
 
 # --- Docling Setup ---
 # Check for docling availability and set up extraction function or mock
@@ -15,22 +22,19 @@ try:
         TesseractCliOcrOptions,
     )
     from docling.document_converter import PdfFormatOption
-    DOCLING_AVAILABLE = True # <-- This flag is now correctly exported
+    DOCLING_AVAILABLE = True
 except ImportError:
-    # Set this flag for the Streamlit app to issue a warning
-    DOCLING_AVAILABLE = False # <-- This flag is now correctly exported
+    DOCLING_AVAILABLE = False
     
     # Mock function definition for unavailable docling
     def extract_content_with_docling(file_path: str, page_range: str = None) -> str:
         """Mocks docling extraction when dependencies are missing."""
-        return f"# Mock Extracted Content from {os.path.basename(file_path)}\n\nThis is mock content because docling is not installed or available.\n\n- Main Point 1\n  - Sub Point A\n- Main Point 2\n\n---\n\n# Slide Title 2\n| Col 1 | Col 2 |\n|---|---|\n| Data 1 | Data 2 |\n| Data 3 | Data 4 |"
+        return f"# Mock Extracted Content from {os.path.basename(file_path)}\n\nThis is mock content because docling is not installed or available.\n\n- Key Document Section 1\n  - Detail A\n- Key Document Section 2\n"
 
-# Define the real Docling extraction only if available
 if DOCLING_AVAILABLE:
     def extract_content_with_docling(file_path: str, page_range: str = None) -> str:
         """Extracts content from various file types using the docling library."""
         try:
-            # Set up Docling with Tesseract for OCR and table structure
             ocr_options = TesseractCliOcrOptions(lang=["eng"])
             pipeline_options = PdfPipelineOptions(
                 do_ocr=True, do_table_structure=True, ocr_options=ocr_options
@@ -45,18 +49,16 @@ if DOCLING_AVAILABLE:
             )
             doc = doc_converter.convert(file_path).document
             
-            # Apply page range if provided
             if page_range:
                 pages = []
                 for part in page_range.split(','):
                     part = part.strip()
                     if '-' in part:
                         start, end = map(int, part.split('-'))
-                        pages.extend(range(start - 1, end)) # 0-indexed
+                        pages.extend(range(start - 1, end))
                     elif part.isdigit():
                         pages.append(int(part) - 1)
                 
-                # Filter pages and export to markdown
                 filtered_content = []
                 for i, page in enumerate(doc.pages):
                     if i in pages:
@@ -66,10 +68,93 @@ if DOCLING_AVAILABLE:
                 return doc.export_to_markdown()
         
         except Exception as e:
-            # Raise the error to be caught by the Streamlit app
             raise Exception(f"Docling extraction error: {e}")
 
-# --- Markdown Parsing and PPTX Creation Functions ---
+
+# --- Gemini LLM Integration ---
+
+GEMINI_LECTURE_PROMPT = '''
+You are an expert instructional designer and content synthesiser. Your task is to take the provided raw document text, synthesize the key information, and structure it into a series of slides using Markdown format.
+
+Your output MUST be a single Markdown string.
+
+### Output Format Rules:
+1.  **Slide Separation:** Use three hyphens (`---`) on a new line to separate each slide.
+2.  **Titles:** Use `# ` for the slide title.
+3.  **Layout Hint:** Start the content of the first slide with `layout: title_slide` on a new line after the title. For subsequent slides, use `layout: title_content` or `layout: comparison` if appropriate, followed by the slide title.
+4.  **Content:** Use standard Markdown list items (`-`, `  -`, etc.) for bullet points. Maintain proper indentation (two spaces per level) for sub-points.
+5.  **Tables:** Use standard GitHub-flavored Markdown for tables, including a header and separator line (e.g., `| Col1 | Col2 |` followed by `|---|---|`).
+6.  **Comparison Slides:** For `layout: comparison` slides, separate the content for the left and right columns with `|||` on a new line.
+
+Here is the raw text you need to convert:
+'''
+
+def generate_structured_markdown(raw_text: str, model: str = 'gemini-2.5-flash') -> str:
+    """
+    Calls the Gemini API to convert raw text into structured slide Markdown.
+    Falls back to a mock if the HARDCODED_GEMINI_API_KEY is not set.
+    """
+    api_key = HARDCODED_GEMINI_API_KEY
+    if api_key == "YOUR_HARDCODED_GEMINI_API_KEY_HERE" or not api_key:
+        # Fallback to local mock if key is missing or is the placeholder
+        return generate_structured_markdown_mock(raw_text, is_hardcoded_missing=True)
+
+    # Use the hardcoded key directly
+    genai.configure(api_key=api_key)
+    client = genai.Client()
+    
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=GEMINI_LECTURE_PROMPT + raw_text
+        )
+        return response.text
+    except APIError as e:
+        # If API call fails (e.g., key invalid, quota exceeded)
+        return f"# Gemini API Error\n- Failed to generate content: {e}\n- Please check your API Key."
+    except Exception as e:
+        return f"# General Error\n- An unexpected error occurred: {e}"
+
+def generate_structured_markdown_mock(raw_text: str, is_hardcoded_missing: bool = False) -> str:
+    """
+    Mock function used when no API key is available or hardcoded key is missing.
+    Uses a generic title.
+    """
+    warning_text = "API Key MISSING or is the placeholder." if is_hardcoded_missing else "Docling is mocked."
+    
+    # Use a generic title instead of deriving from raw_text
+    title_text = "Generated Presentation Summary" 
+    
+    return f"""
+layout: title_slide
+# LLM MOCK: {title_text}
+- Status: Fallback Mock Content ({warning_text})
+- Generated from {len(raw_text)} characters
+
+---
+
+layout: title_content
+# Key Concepts (MOCKED)
+- Concept 1 synthesized from the first paragraph.
+  - Detail A supporting the idea.
+- Concept 2 from the main body.
+
+---
+
+layout: comparison
+# Comparison Table (MOCKED)
+Feature A ||| Feature B
+- Value 1 ||| - Value X
+- Value 2 ||| - Value Y
+
+---
+
+layout: title_content
+# Summary
+This content is a placeholder. Insert your key in pptx_utils.py for real generation.
+"""
+
+# --- Markdown Parsing and PPTX Creation Functions (Unchanged) ---
 
 def create_table_from_markdown(text: str) -> List[List[str]]:
     """Convert Markdown table to table data."""
@@ -119,12 +204,10 @@ def parse_markdown_to_slides(content: str) -> List[Dict]:
         lines = slide_content.strip().split('\n')
         slide_data = {'layout': 'title_content', 'title': None, 'blocks': []}
 
-        # Check for layout override
         if lines and lines[0].strip().lower().startswith('layout:'):
             slide_data['layout'] = lines[0].split(':', 1)[1].strip()
             lines.pop(0)
         
-        # Check for title (H1)
         if lines and lines[0].strip().startswith('# '):
             slide_data['title'] = lines[0][2:].strip()
             lines.pop(0)
@@ -134,7 +217,6 @@ def parse_markdown_to_slides(content: str) -> List[Dict]:
             line = lines[line_idx]
             if not line.strip(): line_idx += 1; continue
 
-            # Bullet points block
             if line.lstrip().startswith(('-', '*', '+')):
                 bullet_lines = []
                 start_indent = len(line) - len(line.lstrip())
@@ -155,7 +237,6 @@ def parse_markdown_to_slides(content: str) -> List[Dict]:
                 slide_data['blocks'].append({'type': 'bullet', 'content': '\n'.join(bullet_lines)})
                 continue
 
-            # Table block
             is_table = False
             if line.strip().startswith('|'):
                 if (line_idx + 1 < len(lines)) and re.match(r'^\s*\|?.*--.*\|?\s*$', lines[line_idx+1]):
@@ -176,7 +257,6 @@ def parse_markdown_to_slides(content: str) -> List[Dict]:
                 slide_data['blocks'].append({'type': 'table', 'content': '\n'.join(table_lines)})
                 continue
 
-            # Regular text block
             text_lines = []
             while line_idx < len(lines):
                 current_line = lines[line_idx]
@@ -204,7 +284,10 @@ def parse_markdown_to_slides(content: str) -> List[Dict]:
     return slides
 
 def create_presentation_from_markdown(content: str, output_path: str = 'output.pptx') -> str:
-    """Create a PowerPoint presentation from Markdown-structured text."""
+    """
+    Create a PowerPoint presentation from Markdown-structured text.
+    (Contains the logic to map Markdown to PPTX slides and elements)
+    """
     prs = Presentation()
     layout_map = {
         'title_slide': prs.slide_layouts[0], 'title_content': prs.slide_layouts[1],
@@ -231,7 +314,6 @@ def create_presentation_from_markdown(content: str, output_path: str = 'output.p
                 left_ph, right_ph = content_placeholders[0], content_placeholders[1]
                 text_block_content = left_text_block['content']
                 
-                # Split content based on '|||' for comparison slides
                 left_text, right_text = text_block_content.split('|||', 1) if '|||' in text_block_content else (text_block_content, "")
                 
                 left_ph.text_frame.clear()
@@ -266,7 +348,6 @@ def create_presentation_from_markdown(content: str, output_path: str = 'output.p
                         top = Inches(2.0)
                         
                         try:
-                            # Attempt to add table
                             table_shape = current_slide.shapes.add_table(rows, cols, left, top, table_width, table_height)
                             table = table_shape.table
                             for r_idx, row_data in enumerate(table_data):
@@ -274,7 +355,6 @@ def create_presentation_from_markdown(content: str, output_path: str = 'output.p
                                     if c_idx < cols:
                                         table.cell(r_idx, c_idx).text = cell_text
                         except ValueError:
-                            # Fallback if table creation fails (e.g., inconsistent columns)
                             p = tf.add_paragraph()
                             p.text = "[ERROR: Could not create table due to inconsistent data. Check Markdown format.]"
                             
