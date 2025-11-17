@@ -99,8 +99,7 @@ def generate_structured_markdown(raw_text: str, model: str = 'gemini-2.5-flash')
         return generate_structured_markdown_mock(raw_text, is_hardcoded_missing=True)
 
     # Use the hardcoded key directly
-    genai.configure(api_key=api_key)
-    client = genai.Client()
+    client = genai.Client(api_key=api_key)
     
     try:
         response = client.models.generate_content(
