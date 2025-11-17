@@ -3,13 +3,13 @@ import streamlit as st
 import tempfile
 import os
 import httpx
-# Import core backend functions, including the hardcoded key variable
+# Import core backend functions
 from pptx_utils import (
     create_presentation_from_markdown, 
     extract_content_with_docling, 
     generate_structured_markdown,
     DOCLING_AVAILABLE,
-    HARDCODED_GEMINI_API_KEY # <-- Imported for status check
+    HARDCODED_GEMINI_API_KEY
 )
 
 # --- Streamlit Session State & Logic ---
@@ -99,7 +99,6 @@ def generate_slides_content():
 
     with st.spinner("🤖 Generating structured slide content using Gemini..."):
         try:
-            # Calls the function in pptx_utils.py (Real LLM call or Mock fallback)
             structured_markdown = generate_structured_markdown(raw_content)
             
             st.session_state['markdown_content'] = structured_markdown
@@ -127,37 +126,44 @@ def main_app_ui():
             "was not fully available. Extraction results will use mock data."
         )
     
-    # --- 1. Import Content ---
+    # --- 1. Extract Raw Document Content ---
     st.header("1. Extract Raw Document Content")
     
-    with st.form(key='import_form'):
-        col_url, col_range = st.columns([3, 1])
-        with col_url:
-            url_input = st.text_input("URL:", key="url_input", help="Enter link to a document.")
-        with col_range:
-            range_input = st.text_input("Page Range:", key="range_input", help="e.g., 1-5")
-
-        st.markdown("---")
-        
+    # --- A. Local File Import (Outside Form) ---
+    st.subheader("Import from Local File")
+    
+    col_file_upload, col_file_range = st.columns([3, 1])
+    
+    with col_file_upload:
         uploaded_file = st.file_uploader(
             "Upload Document (e.g., PDF, DOCX):", 
             type=['pdf', 'docx', 'doc', 'txt'], 
             key="file_uploader_main"
         )
-        
-        st.markdown("---")
+    with col_file_range:
+        file_range_input = st.text_input("Page Range:", key="file_range_input_main", help="e.g., 1-5")
+    
+    # Button to trigger the file import logic
+    if st.button("Import Uploaded File", type="primary", key="file_import_button_final"):
+        if uploaded_file:
+            import_file_content(uploaded_file, file_range_input)
+        else:
+            st.error("Please upload a file before clicking 'Import Uploaded File'.")
 
-        col_buttons = st.columns(2)
-        
-        submit_file = col_buttons[0].form_submit_button("Import Uploaded File", type="primary")
-        submit_url = col_buttons[1].form_submit_button("Import from URL", type="primary")
+    st.markdown("---")
+    
+    # --- B. URL Import (Inside Form) ---
+    st.subheader("Import from URL")
 
-        if submit_file:
-            if uploaded_file:
-                import_file_content(uploaded_file, range_input)
-            else:
-                st.error("Please upload a file before clicking 'Import Uploaded File'.")
-        
+    with st.form(key='url_import_form'):
+        col_url, col_range = st.columns([3, 1])
+        with col_url:
+            url_input = st.text_input("URL:", key="url_input", help="Enter link to a document.")
+        with col_range:
+            range_input = st.text_input("Page Range:", key="url_range_input", help="e.g., 1-5")
+
+        submit_url = st.form_submit_button("Import from URL", type="primary")
+
         if submit_url:
             if url_input:
                 import_from_url(url_input, range_input)
@@ -171,11 +177,10 @@ def main_app_ui():
     
     raw_content_len = len(st.session_state.get('raw_extracted_content', ''))
     
-    # Status check using the hardcoded key
     if HARDCODED_GEMINI_API_KEY != "YOUR_HARDCODED_GEMINI_API_KEY_HERE":
         st.success("🔑 Gemini API Key found in `pptx_utils.py`. Real AI generation is active.")
     else:
-        st.warning("⚠️ **API Key MISSING or is the placeholder.** Generation will use mock content. Please insert your key into the `HARDCODED_GEMINI_API_KEY` variable in `pptx_utils.py`.")
+        st.warning("⚠️ **API Key MISSING or is the placeholder.** Generation will use mock content.")
     
     if raw_content_len > 0:
         st.info(f"Raw content of **{raw_content_len}** characters is ready for processing.")
