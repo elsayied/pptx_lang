@@ -370,7 +370,8 @@ def load_content_from_resources():
                     full_content.append(f"--- WARNING: No content extracted from {res['name']} ---\n")
 
             except Exception as e:
-                full_content.append(f"--- ERROR processing {res['name']}: {e} ---\n")
+                full_content.append(f"--- ERROR processing {res['name']} ---\n")
+                st.exception(e) # Display exception in the app for better debugging
 
     st.session_state['markdown_content'] = "\n\n".join(full_content)
     st.success("Content loaded successfully into the editor.")
@@ -476,7 +477,8 @@ def main_app_ui():
     st.header("4. Generate Presentation")
     
     # Generate Button
-    if st.button("Generate Presentation (.pptx)", type="success", key="generate_btn"):
+    # FIX: Changed type="success" to type="primary" to resolve StreamlitAPIException
+    if st.button("Generate Presentation (.pptx)", type="primary", key="generate_btn"):
         content = st.session_state['markdown_content']
         if not content.strip():
             st.error("The content editor is empty.")
