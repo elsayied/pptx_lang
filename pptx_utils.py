@@ -151,18 +151,29 @@ def create_table_from_markdown(text: str) -> List[List[str]]:
 
 def add_formatted_text_runs(paragraph, text, bold=False, italic=False, underline=False):
     """
-    Parses markdown-like formatting for bold, italic, and underline and adds
-    formatted runs to the given paragraph. Handles basic nesting.
+    Recursively parses markdown-like formatting for bold, italic, and
+    underline, and adds formatted runs to the given paragraph.
+
+    This function works by repeatedly splitting the text by all possible
+    formatting markers. If the text can't be split further, it's considered
+    plain text and added as a single run with the formatting inherited from
+    its parent calls. If the text is split, the function calls itself for
+    each segment, updating the formatting flags (bold, italic, etc.) for
+    segments that were wrapped in markers.
+
     - ***text*** for bold & italic
     - **text** for bold
     - *text* for italic
     - __text__ for underline
     """
-    # Split by the formatting markers, keeping them. The regex uses non-greedy `.+?`
-    # and `[\s\S]` to match across newlines.
-    parts = re.split(r"(\*\*\*[\s\S]+?\*\*\*|\*\*[\s\S]+?\*\*|\*[\s\S]+?\*|__[\s\S]+?__)", text)
+    # Split by the formatting markers, keeping them.
+    parts = re.split(
+        r"(\*\*\*[\s\S]+?\*\*\*|\*\*[\s\S]+?\*\*|\*[\s\S]+?\*|__[\s\S]+?__)", text
+    )
 
-    if len(parts) == 1:  # No formatting found
+    # Base case: If the text is not split into more than one part,
+    # it means no formatting markers were found. Add the text as a single run.
+    if len(parts) == 1:
         if text:
             run = paragraph.add_run()
             run.text = text
@@ -172,29 +183,36 @@ def add_formatted_text_runs(paragraph, text, bold=False, italic=False, underline
             font.underline = underline
         return
 
+    # Recursive step: For each part of the split text, determine if it's
+    # a formatted segment or plain text, and recurse.
     for part in parts:
         if not part:
             continue
 
-        # Order of checks is important: *** then ** then *
-        if part.startswith('***') and part.endswith('***'):
+        # Order of checks is important: *** must be checked before ** or *.
+        if part.startswith("***") and part.endswith("***"):
+            # It's a bold and italic segment, recurse on its content with new formatting.
             add_formatted_text_runs(
                 paragraph, part[3:-3], bold=True, italic=True, underline=underline
             )
-        elif part.startswith('**') and part.endswith('**'):
+        elif part.startswith("**") and part.endswith("**"):
+            # It's a bold segment, recurse on its content.
             add_formatted_text_runs(
                 paragraph, part[2:-2], bold=True, italic=italic, underline=underline
             )
-        elif part.startswith('*') and part.endswith('*'):
+        elif part.startswith("*") and part.endswith("*"):
+            # It's an italic segment, recurse on its content.
             add_formatted_text_runs(
                 paragraph, part[1:-1], bold=bold, italic=True, underline=underline
             )
-        elif part.startswith('__') and part.endswith('__'):
+        elif part.startswith("__") and part.endswith("__"):
+            # It's an underline segment, recurse on its content.
             add_formatted_text_runs(
                 paragraph, part[2:-2], bold=bold, italic=italic, underline=True
             )
         else:
-            # This is a plain text part, so pass down the inherited formatting
+            # This is a plain text part with no new markers.
+            # Recurse on it, passing down the formatting from the parent.
             add_formatted_text_runs(
                 paragraph, part, bold=bold, italic=italic, underline=underline
             )
@@ -229,7 +247,22 @@ def add_bullet_points_from_markdown(text_frame, points: str):
 
 
 def parse_markdown_to_slides(content: str) -> List[Dict]:
-    """Parses markdown-like text into a list of slide definitions."""
+    """
+    Parses markdown-like text into a list of slide definitions.
+
+    This function iterates through the input content line by line, maintaining
+    state (e.g., `in_notes_block`, `in_column_block`) to determine what kind of
+    content is currently being parsed. It identifies structural elements like
+    layout definitions, titles, and various content blocks (notes, columns,
+    code, lists, tables, text), converting them into a structured list of
+    dictionaries, where each dictionary represents a single slide.
+    """
+    slides = []
+    # A slide is defined as the content between '---' separators.
+    import re
+from typing import List, Dict
+
+def parse_markdown_to_slides(content: str) -> List[Dict]:
     slides = []
     slide_contents = re.split(r"\n---\n", content)
 
@@ -247,6 +280,7 @@ def parse_markdown_to_slides(content: str) -> List[Dict]:
             "notes": "",
         }
 
+        # The first lines of a slide can define the layout and title.
         if lines and lines[0].startswith("layout:"):
             slide_data["layout"] = lines[0].split(":", 1)[1].strip()
             lines.pop(0)
@@ -256,25 +290,29 @@ def parse_markdown_to_slides(content: str) -> List[Dict]:
             lines.pop(0)
 
         line_idx = 0
-
         in_notes_block = False
         in_column_block = False
 
         while line_idx < len(lines):
             line = lines[line_idx]
+            stripped_line = line.strip() # Calculate this once
 
-            if line.strip() == "::: notes":
+            # 1. ROBUST MARKER CHECKS (Handle extra spaces/case)
+            if stripped_line.lower().startswith("::: notes"):
                 in_notes_block = True
                 line_idx += 1
                 continue
 
-            if line.strip() == "::: column":
+            if stripped_line.lower().startswith("::: column"):
                 in_column_block = True
+                if not slide_data["columns"] and slide_data["blocks"]:
+                    slide_data["columns"].append(slide_data["blocks"])
+                    slide_data["blocks"] = []
                 slide_data["columns"].append([])
                 line_idx += 1
                 continue
 
-            if line.strip() == ":::":
+            if stripped_line == ":::":
                 in_notes_block = False
                 in_column_block = False
                 line_idx += 1
@@ -285,60 +323,67 @@ def parse_markdown_to_slides(content: str) -> List[Dict]:
                 line_idx += 1
                 continue
 
-            # Determine the current block list to append to
             current_blocks = (
                 slide_data["columns"][-1]
                 if in_column_block and slide_data["columns"]
                 else slide_data["blocks"]
             )
 
-            if not line.strip():
+            if not stripped_line:
                 line_idx += 1
                 continue
 
+            # --- PARSING BLOCKS ---
+
             # Code blocks
-            if line.strip().startswith("```"):
+            if stripped_line.startswith("```"):
                 code_lines = []
-                lang = line.strip()[3:]
+                lang = stripped_line[3:]
                 line_idx += 1
-                while line_idx < len(lines) and not lines[line_idx].strip().startswith(
-                    "```"
-                ):
+                while line_idx < len(lines) and not lines[line_idx].strip().startswith("```"):
                     code_lines.append(lines[line_idx])
                     line_idx += 1
-                line_idx += 1  # Skip closing ```
+                line_idx += 1
                 current_blocks.append(
                     {"type": "code", "language": lang, "content": "\n".join(code_lines)}
                 )
                 continue
 
+            # Image
             if re.match(r"^\s*!\[.*\]\(.*\)\s*$", line):
                 current_blocks.append({"type": "image", "content": line.strip()})
                 line_idx += 1
                 continue
 
+            # Bulleted lists
             if line.lstrip().startswith(("-", "*", "+")):
                 bullet_lines = []
                 start_indent = len(line) - len(line.lstrip())
-                while line_idx < len(lines) and (
-                    not lines[line_idx].strip()
-                    or (
-                        len(lines[line_idx]) - len(lines[line_idx].lstrip())
-                        >= start_indent
-                    )
-                ):
-                    bullet_lines.append(lines[line_idx])
+                
+                while line_idx < len(lines):
+                    curr_line = lines[line_idx]
+                    curr_stripped = curr_line.strip()
+                    
+                    # --- CRITICAL FIX 1: Stop if we hit a marker ---
+                    if curr_stripped.startswith(":::") or curr_stripped.startswith("```"):
+                        break
+                        
+                    # Stop if indentation breaks (ignoring empty lines)
+                    if curr_stripped and (len(curr_line) - len(curr_line.lstrip()) < start_indent):
+                        break
+                        
+                    bullet_lines.append(curr_line)
                     line_idx += 1
+                    
                 current_blocks.append(
                     {"type": "bullet", "content": "\n".join(bullet_lines)}
                 )
                 continue
 
+            # Tables
             is_table = False
             if "|" in line:
-                if (line_idx + 1 < len(lines)) and re.match(
-                    r"^\s*\|?.*--.*\|?\s*$", lines[line_idx + 1]
-                ):
+                if (line_idx + 1 < len(lines)) and re.match(r"^\s*\|?.*--.*\|?\s*$", lines[line_idx + 1]):
                     is_table = True
 
             if is_table:
@@ -351,20 +396,21 @@ def parse_markdown_to_slides(content: str) -> List[Dict]:
                 )
                 continue
 
+            # Plain text
             text_lines = []
             while line_idx < len(lines):
                 current_line = lines[line_idx]
+                curr_stripped = current_line.strip()
+                
+                # --- CRITICAL FIX 2: Stop if we hit a marker ---
+                # Also removed the strict 'in list' check for flexibility
                 if (
-                    not current_line.strip()
+                    not curr_stripped
                     or current_line.lstrip().startswith(("-", "*", "+"))
                     or re.match(r"^\s*!\[.*\]\(.*\)\s*$", current_line)
-                    or current_line.strip().startswith("```")
-                    or current_line.strip() in ["::: notes", "::: column", ":::"]
-                    or (
-                        "|" in current_line
-                        and (line_idx + 1 < len(lines))
-                        and re.match(r"^\s*\|?.*--.*\|?\s*$", lines[line_idx + 1])
-                    )
+                    or curr_stripped.startswith("```")
+                    or curr_stripped.startswith(":::") # Stop on ANY marker
+                    or ("|" in current_line and (line_idx + 1 < len(lines)) and re.match(r"^\s*\|?.*--.*\|?\s*$", lines[line_idx + 1]))
                 ):
                     break
                 text_lines.append(current_line)
@@ -374,19 +420,9 @@ def parse_markdown_to_slides(content: str) -> List[Dict]:
                 current_blocks.append(
                     {"type": "text", "content": "\n".join(text_lines)}
                 )
-        
-        # Post-processing to handle implicit first column
-        if (
-            slide_data["layout"] in ["two_content", "comparison"]
-            and slide_data["blocks"]
-        ):
-            slide_data["columns"].insert(0, slide_data["blocks"])
-            slide_data["blocks"] = []
-
 
         slides.append(slide_data)
     return slides
-
 
 # Maximum number of lines (approximated) allowed per slide.
 # This is a heuristic and may need adjustment.
@@ -594,11 +630,20 @@ def create_presentation_from_markdown(
     content: str, output_path: str = "output.pptx"
 ) -> str:
     """
-    Create a PowerPoint presentation from Markdown-structured text.
+    Creates and saves a PowerPoint presentation from structured slide data.
+
+    This function iterates through a list of slide data dictionaries, each
+    representing a slide. For each slide, it selects the appropriate layout,
+    adds a new slide to the presentation, and then populates the title, notes,
+    and content placeholders based on the parsed data. It contains specific
+    logic to handle different layouts, such as 'two_content', and different
+    content block types like text, lists, code, and tables.
     """
     prs = Presentation()
     from pptx.util import Pt
 
+    # Map layout names from our Markdown format to the default slide layouts
+    # available in python-pptx. The numbers correspond to standard layout indices.
     layout_map = {
         "title_slide": prs.slide_layouts[0],
         "title_content": prs.slide_layouts[1],
@@ -607,7 +652,7 @@ def create_presentation_from_markdown(
         "comparison": prs.slide_layouts[4],
         "title_only": prs.slide_layouts[5],
         "blank": prs.slide_layouts[6],
-        "picture_and_caption": prs.slide_layouts[8],  # Picture with Caption
+        "picture_and_caption": prs.slide_layouts[8],
     }
 
     slides_data = parse_markdown_to_slides(content)
@@ -619,21 +664,23 @@ def create_presentation_from_markdown(
 
         current_slide = prs.slides.add_slide(slide_layout)
 
+        # Populate the title placeholder if it exists on the layout.
         if slide_data["title"]:
             if current_slide.shapes.title:
                 current_slide.shapes.title.text = slide_data["title"]
 
+        # Populate the speaker notes.
         if slide_data.get("notes"):
             notes_slide = current_slide.notes_slide
             text_frame = notes_slide.notes_text_frame
             text_frame.text = slide_data["notes"]
 
-        # Find image blocks to be processed separately
         image_blocks = [b for b in slide_data["blocks"] if b["type"] == "image"]
         other_blocks = [b for b in slide_data["blocks"] if b["type"] != "image"]
 
+        # --- Two-Column Layout Rendering ---
         if layout_name in ["comparison", "two_content"]:
-            # Basic implementation for columns, will be improved
+            # Identify the left and right content placeholders.
             content_placeholders = [
                 p
                 for p in current_slide.placeholders
@@ -642,10 +689,10 @@ def create_presentation_from_markdown(
             if len(content_placeholders) >= 2:
                 left_ph, right_ph = content_placeholders[0], content_placeholders[1]
 
-                # Handle new column structure
+                # If the parser created a 'columns' data structure, render from it.
                 if slide_data["columns"]:
+                    # Render the first column's blocks into the left placeholder.
                     if len(slide_data["columns"]) > 0:
-                        # For now, just put all blocks of first column in left
                         tf_left = left_ph.text_frame
                         tf_left.clear()
                         for block in slide_data["columns"][0]:
@@ -660,12 +707,11 @@ def create_presentation_from_markdown(
                                 p = tf_left.add_paragraph()
                                 run = p.add_run()
                                 run.text = block["content"]
-                                font = run.font
-                                font.name = "Courier New"
-                                font.size = Pt(10)
+                                run.font.name = "Courier New"
+                                run.font.size = Pt(10)
 
+                    # Render the second column's blocks into the right placeholder.
                     if len(slide_data["columns"]) > 1:
-                        # And second in right
                         tf_right = right_ph.text_frame
                         tf_right.clear()
                         for block in slide_data["columns"][1]:
@@ -680,11 +726,10 @@ def create_presentation_from_markdown(
                                 p = tf_right.add_paragraph()
                                 run = p.add_run()
                                 run.text = block["content"]
-                                font = run.font
-                                font.name = "Courier New"
-                                font.size = Pt(10)
+                                run.font.name = "Courier New"
+                                run.font.size = Pt(10)
 
-                else:  # Fallback to old ||| logic
+                else:  # Fallback for the simple '|||' separator syntax.
                     text_block_content = ""
                     for block in other_blocks:
                         if block["type"] == "text":
@@ -699,15 +744,13 @@ def create_presentation_from_markdown(
                     left_ph.text_frame.clear()
                     p_left = left_ph.text_frame.add_paragraph()
                     add_formatted_text_runs(p_left, left_text.strip())
-
                     right_ph.text_frame.clear()
                     p_right = right_ph.text_frame.add_paragraph()
                     add_formatted_text_runs(p_right, right_text.strip())
 
+        # --- Other Layouts ---
         elif layout_name == "picture_and_caption":
-            # Handle picture and caption layout
             if image_blocks:
-                # Find picture placeholder (usually idx=1, type=18)
                 pic_placeholder = next(
                     (
                         p
@@ -726,7 +769,6 @@ def create_presentation_from_markdown(
                             except Exception as e:
                                 print(f"Could not insert image {image_path}: {e}")
 
-            # Find body/caption placeholder for other content
             body_shape = next(
                 (
                     p
@@ -748,12 +790,10 @@ def create_presentation_from_markdown(
                         p = tf.add_paragraph()
                         run = p.add_run()
                         run.text = block["content"]
-                        font = run.font
-                        font.name = "Courier New"
-                        font.size = Pt(10)
+                        run.font.name = "Courier New"
+                        run.font.size = Pt(10)
 
-        else:
-            # Default handling for other layouts
+        else:  # Default handling for single-content-area layouts.
             body_shape = next(
                 (
                     shape
@@ -762,7 +802,6 @@ def create_presentation_from_markdown(
                 ),
                 None,
             )
-
             if body_shape:
                 tf = body_shape.text_frame
                 tf.clear()
@@ -777,9 +816,8 @@ def create_presentation_from_markdown(
                         p = tf.add_paragraph()
                         run = p.add_run()
                         run.text = block["content"]
-                        font = run.font
-                        font.name = "Courier New"
-                        font.size = Pt(10)
+                        run.font.name = "Courier New"
+                        run.font.size = Pt(10)
                     elif block["type"] == "table":
                         table_data = create_table_from_markdown(block["content"])
                         if not table_data:
@@ -805,17 +843,18 @@ def create_presentation_from_markdown(
                                     p = tf.add_paragraph()
                                     add_formatted_text_runs(p, cell_text)
 
-            # Add images to non-picture layouts at a default position
+            # Add any images to the slide at a default position.
             if image_blocks:
                 for i, block in enumerate(image_blocks):
                     match = re.match(r"!\[.*\]\((.*)\)", block["content"])
                     if match:
                         image_path = match.group(1)
                         if os.path.exists(image_path):
-                            # Basic positioning to avoid overlap, can be improved
-                            left = Inches(1)
-                            top = Inches(2.5 + i * 2)
-                            height = Inches(2)
+                            left, top, height = (
+                                Inches(1),
+                                Inches(2.5 + i * 2),
+                                Inches(2),
+                            )
                             try:
                                 current_slide.shapes.add_picture(
                                     image_path, left, top, height=height
@@ -834,7 +873,7 @@ def generate_gemini_response(text: str, model: str = "gemini-2.5-pro"):
             model=model,
             contents=GEMINI_LECTURE_PROMPT + text,
         )
-        logging.info(f"{response}")
+        logging.info(f"{response.text}")
     except Exception as e:
         print("=== oh poor thing, an error ===")
         raise e
@@ -989,7 +1028,7 @@ The image will be placed at a default position.
     )
     print("-------------- preprocessing images")
 
-    real_content_with_images = preprocess_markdown_for_images(real_content)
+    real_content_with_images = real_content#preprocess_markdown_for_images(real_content)
     output_path = create_presentation_from_markdown(
         real_content_with_images, "my_markdown_presentation.pptx"
     )
