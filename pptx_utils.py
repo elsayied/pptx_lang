@@ -9,6 +9,7 @@ import asyncio
 import nest_asyncio
 from google import genai
 import logging
+from pprint import pprint
 
 # Apply nest_asyncio to allow nested event loops (crucial for Streamlit + edge-tts)
 nest_asyncio.apply()
