@@ -217,7 +217,7 @@ def generate_structured_markdown(text: str) -> str:
         return f"Gemini API Error: {e}"
 
 def generate_podcast_script(raw_text: str) -> List[Dict]:
-    """Generates script (1 API Call)."""
+    """Generates script (1 API Call) with robust cleanup."""
     client = genai.Client(api_key=HARDCODED_GEMINI_API_KEY)
     truncated_text = raw_text[:30000]
     try:
@@ -226,19 +226,41 @@ def generate_podcast_script(raw_text: str) -> List[Dict]:
             contents=GEMINI_PODCAST_PROMPT.format(text_content=truncated_text),
             config={'response_mime_type': 'application/json'}
         )
-        return json.loads(response.text)
+        
+        # --- FIX: Clean Response Text ---
+        text_resp = response.text.strip()
+        # Remove markdown code blocks if present
+        if text_resp.startswith("```"):
+            text_resp = re.sub(r"^```(json)?|```$", "", text_resp, flags=re.MULTILINE).strip()
+            
+        script = json.loads(text_resp)
+        
+        # Ensure it's a list
+        if isinstance(script, dict):
+            script = [script]
+            
+        return script
     except Exception as e:
         logging.error(f"Script Error: {e}")
-        return [{"speaker": "Host", "text": "Error generating script. Please try again."}]
+        # Return a safe fallback that works with audio generation
+        return [
+            {"speaker": "Sascha", "text": "I am having trouble reading this document."},
+            {"speaker": "Marina", "text": "Let's try processing it again."}
+        ]
 
 async def _synthesize_audio_chunk(text, voice, output_filename):
     import edge_tts
-    # FIX: Ensure text is not empty or just whitespace/punctuation
-    if not text or not text.strip() or not any(c.isalnum() for c in text):
+    
+    # --- FIX: Clean text to avoid TTS errors ---
+    # Remove asterisks, hashtags, or excessive newlines which might confuse the TTS
+    clean_text = re.sub(r"[*#_`]", "", text).strip()
+    
+    # If text is empty or meaningless, skip it
+    if not clean_text or not any(c.isalnum() for c in clean_text):
         logging.warning(f"Skipping empty/invalid text chunk: '{text}'")
         return 
         
-    communicate = edge_tts.Communicate(text, voice)
+    communicate = edge_tts.Communicate(clean_text, voice)
     await communicate.save(output_filename)
 
 def generate_audio_overview(script: List[Dict], output_path: str):
@@ -250,13 +272,13 @@ def generate_audio_overview(script: List[Dict], output_path: str):
     try:
         loop = asyncio.get_event_loop()
         for i, line in enumerate(script):
-            text = line.get("text", "").strip()
+            text = line.get("text", "")
+            if not text: continue
             
-            # FIX: Skip empty lines before sending to Edge TTS to avoid NoAudioReceived error
-            if not text:
-                continue
-
-            voice = "en-US-GuyNeural" if line.get("speaker") == "Sascha" else "en-US-JennyNeural"
+            # Robust voice selection
+            speaker_name = line.get("speaker", "Sascha")
+            voice = "en-US-GuyNeural" if speaker_name == "Sascha" else "en-US-JennyNeural"
+            
             fname = os.path.join(temp_dir, f"chunk_{i:03d}.mp3")
             
             try:
@@ -265,7 +287,6 @@ def generate_audio_overview(script: List[Dict], output_path: str):
                     chunk_files.append(fname)
             except Exception as e:
                 logging.error(f"Error generating chunk {i}: {e}")
-                # Continue processing other chunks even if one fails
                 continue
                 
         if chunk_files:
@@ -273,7 +294,6 @@ def generate_audio_overview(script: List[Dict], output_path: str):
                 for f in chunk_files:
                     with open(f, 'rb') as infile: shutil.copyfileobj(infile, outfile)
         else:
-            # Create a silent or error mp3 if no chunks were generated
             logging.error("No audio chunks generated.")
             
     finally:
