@@ -1,4 +1,3 @@
-# pptx_utils.py
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from typing import List, Dict
@@ -20,7 +19,7 @@ HARDCODED_GEMINI_API_KEY = "AIzaSyA4YsTnbNjl2gKn20EqPa-9nom9yymEwd0"
 
 logging.basicConfig(level=logging.INFO)
 
-# --- Docling Availability Check (FIXED) ---
+# --- Docling Availability Check ---
 try:
     from docling.document_converter import DocumentConverter
     DOCLING_AVAILABLE = True
@@ -190,7 +189,6 @@ def create_presentation_from_markdown(content: str, output_path: str = "output.p
         if slide_data["title"] and slide.shapes.title: slide.shapes.title.text = slide_data["title"]
         if slide_data["notes"]: slide.notes_slide.notes_text_frame.text = slide_data["notes"]
         
-        # Simple rendering for brevity - handles text/bullets
         body = next((s for s in slide.placeholders if s.placeholder_format.idx!=0 and s.has_text_frame), None)
         blocks = [b for b in slide_data["blocks"] if b["type"]!="image"]
         if body and blocks:
@@ -204,7 +202,7 @@ def create_presentation_from_markdown(content: str, output_path: str = "output.p
     prs.save(output_path)
     return output_path
 
-# --- CORE FUNCTIONS (Renamed for compatibility) ---
+# --- CORE FUNCTIONS ---
 
 def generate_structured_markdown(text: str) -> str:
     """Generates slides markdown using Gemini."""
@@ -231,10 +229,15 @@ def generate_podcast_script(raw_text: str) -> List[Dict]:
         return json.loads(response.text)
     except Exception as e:
         logging.error(f"Script Error: {e}")
-        return [{"speaker": "Host", "text": "Error generating script."}]
+        return [{"speaker": "Host", "text": "Error generating script. Please try again."}]
 
 async def _synthesize_audio_chunk(text, voice, output_filename):
     import edge_tts
+    # FIX: Ensure text is not empty or just whitespace/punctuation
+    if not text or not text.strip() or not any(c.isalnum() for c in text):
+        logging.warning(f"Skipping empty/invalid text chunk: '{text}'")
+        return 
+        
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(output_filename)
 
@@ -243,16 +246,36 @@ def generate_audio_overview(script: List[Dict], output_path: str):
     temp_dir = "temp_audio_chunks"
     os.makedirs(temp_dir, exist_ok=True)
     chunk_files = []
+    
     try:
         loop = asyncio.get_event_loop()
         for i, line in enumerate(script):
+            text = line.get("text", "").strip()
+            
+            # FIX: Skip empty lines before sending to Edge TTS to avoid NoAudioReceived error
+            if not text:
+                continue
+
             voice = "en-US-GuyNeural" if line.get("speaker") == "Sascha" else "en-US-JennyNeural"
             fname = os.path.join(temp_dir, f"chunk_{i:03d}.mp3")
-            loop.run_until_complete(_synthesize_audio_chunk(line.get("text",""), voice, fname))
-            chunk_files.append(fname)
-        with open(output_path, 'wb') as outfile:
-            for f in chunk_files:
-                with open(f, 'rb') as infile: shutil.copyfileobj(infile, outfile)
+            
+            try:
+                loop.run_until_complete(_synthesize_audio_chunk(text, voice, fname))
+                if os.path.exists(fname):
+                    chunk_files.append(fname)
+            except Exception as e:
+                logging.error(f"Error generating chunk {i}: {e}")
+                # Continue processing other chunks even if one fails
+                continue
+                
+        if chunk_files:
+            with open(output_path, 'wb') as outfile:
+                for f in chunk_files:
+                    with open(f, 'rb') as infile: shutil.copyfileobj(infile, outfile)
+        else:
+            # Create a silent or error mp3 if no chunks were generated
+            logging.error("No audio chunks generated.")
+            
     finally:
         if os.path.exists(temp_dir): shutil.rmtree(temp_dir)
 
