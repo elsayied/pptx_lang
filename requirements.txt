@@ -2,3 +2,5 @@ docling
 httpx
 python-pptx
 google-genai
+edge-tts
+nest_asyncio
