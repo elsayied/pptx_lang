@@ -1,4 +1,3 @@
-import logging
 import os
 import re
 from pprint import pprint
@@ -9,6 +8,7 @@ from PIL import Image
 from pptx import Presentation
 from pptx.util import Inches
 
+import logging
 logging.basicConfig(
     level=logging.INFO,
 )
@@ -79,7 +79,7 @@ def generate_image(prompt: str, output_path: str):
         logging.info(f"Generating image for prompt: {prompt}")
         client = genai.Client(api_key="AIzaSyA4YsTnbNjl2gKn20EqPa-9nom9yymEwd0")
         response = client.models.generate_content(
-            model="gemini-2.5-flash-image",  # Or another model, as per docs
+            model="gemini-2.0-flash-preview-image-generation",  # Or another model, as per docs
             contents=[prompt],
         )
 
@@ -113,7 +113,7 @@ def preprocess_markdown_for_images(markdown_content: str) -> str:
     for i, (alt_text, prompt) in enumerate(matches):
         image_filename = f"generated_image_{i}.png"
         output_path = os.path.join(images_dir, image_filename)
-
+        sleep_min()
         if generate_image(prompt, output_path):
             # Replace the gemini directive with the local file path
             original_directive = f"![{alt_text}](gemini:{prompt})"
@@ -121,6 +121,7 @@ def preprocess_markdown_for_images(markdown_content: str) -> str:
             modified_content = modified_content.replace(
                 original_directive, new_directive, 1
             )
+            logging.info(f'{new_directive = }\n {original_directive = }\n')
         else:
             logging.warning(f"Could not generate image for prompt: {prompt}")
 
@@ -648,8 +649,8 @@ def create_presentation_from_markdown(
         "title_slide": prs.slide_layouts[0],
         "title_content": prs.slide_layouts[1],
         "section_header": prs.slide_layouts[2],
-        "two_content": prs.slide_layouts[3],
-        "comparison": prs.slide_layouts[4],
+        "two_content": prs.slide_layouts[3], # in parser we don't distinguish two_content and comparison
+        "comparison": prs.slide_layouts[3], # quick fix: use two_content for comparison
         "title_only": prs.slide_layouts[5],
         "blank": prs.slide_layouts[6],
         "picture_and_caption": prs.slide_layouts[8],
@@ -1028,7 +1029,7 @@ The image will be placed at a default position.
     )
     print("-------------- preprocessing images")
 
-    real_content_with_images = real_content#preprocess_markdown_for_images(real_content)
+    real_content_with_images = preprocess_markdown_for_images(real_content)
     output_path = create_presentation_from_markdown(
         real_content_with_images, "my_markdown_presentation.pptx"
     )
