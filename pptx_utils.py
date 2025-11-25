@@ -288,7 +288,9 @@ def _split_text_block(content: str, limit: int) -> List[Dict]:
 
 def _split_bullet_block(content: str, limit: int) -> List[Dict]:
     # ... (existing code) ...
-    lines = content.split("\n"); if not lines: return []
+    lines = content.split("\n")
+    if not lines:
+       return []
     min_indent = float("inf")
     for line in lines:
         if line.strip(): min_indent = min(min_indent, len(line) - len(line.lstrip()))
