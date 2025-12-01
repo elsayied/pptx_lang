@@ -1,22 +1,27 @@
 import asyncio
+import base64
 import json
 import logging
 import os
 import re
+import zlib
 from pprint import pprint
 from typing import Dict, List
 
+import httpx
 import nest_asyncio
+from elevenlabs.client import ElevenLabs
 from google import genai
 from pptx import Presentation
 from pptx.util import Inches, Pt
+from youtube_transcript_api import YouTubeTranscriptApi
 
-# Apply nest_asyncio to allow nested event loops (crucial for Streamlit + edge-tts)
+# Apply nest_asyncio to allow nested event loops
 nest_asyncio.apply()
 
-# --- HARDCODED API KEY (SECURITY WARNING: DO NOT USE IN PUBLIC REPOSITORIES) ---
-# ⚠️ REPLACE THE PLACEHOLDER BELOW WITH YOUR ACTUAL GEMINI API KEY ⚠️
-HARDCODED_GEMINI_API_KEY = "AIzaSyA4YsTnbNjl2gKn20EqPa-9nom9yymEwd0"
+# --- API KEYS (SECURITY WARNING: DO NOT USE IN PUBLIC REPOSITORIES) ---
+
+
 # ---
 
 logging.basicConfig(level=logging.INFO)
@@ -31,7 +36,6 @@ except ImportError:
     logging.warning("Docling not available. Mock content may be used.")
 
 # --- PROMPTS ---
-
 GEMINI_LECTURE_PROMPT = """
 You are a master presentation creator. Transform the following text into a presentation in Markdown.
 Output ONLY the Markdown.
@@ -42,7 +46,34 @@ Syntax:
 3. `layout: title_content` (or others) on first line.
 4. `::: notes` for speaker notes.
 5. `::: column` for columns.
-6. Images: `![alt](path)` or `![alt](gemini:prompt)`.
+6. **Diagrams with Mermaid**: To add a diagram, use a fenced code block with the `mermaid` language identifier. Create diagrams that are clear, well-structured, and visually impressive.
+    *   **Use different shapes**: `A[Client]`, `B(Database)`, `C{Decision}`.
+    *   **Add styles**: Use `classDef` to define styles for nodes and `class` to apply them.
+    *   **Choose the right layout**: `TD` (top-down), `LR` (left-right), etc.
+
+    Example of a beautiful Mermaid diagram:
+    ```mermaid
+    graph TD;
+        subgraph "User Interaction"
+            A[Start] --> B{User Login?};
+            B -- Yes --> C[Access Dashboard];
+            B -- No --> D[Show Login Page];
+        end
+
+        subgraph "Backend Services"
+            C --> E(API Gateway);
+            E --> F[Auth Service];
+            E --> G[Data Service];
+        end
+
+        classDef start-end fill:#2E8B57,stroke:#333,stroke-width:2px,color:#fff;
+        classDef process fill:#4682B4,stroke:#333,stroke-width:2px,color:#fff;
+        classDef decision fill:#DAA520,stroke:#333,stroke-width:2px,color:#fff;
+
+        class A,C start-end;
+        class B decision;
+        class D,E,F,G process;
+    ```
 
 Text to transform:
 """
@@ -56,24 +87,6 @@ Text:
 """
 
 # --- HELPER FUNCTIONS ---
-
-
-def generate_image(prompt: str, output_path: str):
-    """Generates an image using Gemini."""
-    try:
-        client = genai.Client(api_key=HARDCODED_GEMINI_API_KEY)
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[prompt],
-        )
-        for part in response.parts:
-            if part.inline_data is not None:
-                image = part.as_image()
-                image.save(output_path)
-                return output_path
-    except Exception as e:
-        logging.error(f"Error generating image: {e}")
-        return None
 
 
 def create_table_from_markdown(text: str) -> List[List[str]]:
@@ -262,9 +275,74 @@ def parse_markdown_to_slides(content: str) -> List[Dict]:
     return slides
 
 
+def render_mermaid_diagram(mermaid_code: str, output_path: str):
+    """Renders a Mermaid diagram using the Kroki.io service."""
+    try:
+        encoded_diagram = base64.urlsafe_b64encode(
+            zlib.compress(mermaid_code.encode("utf-8"), 9)
+        ).decode("utf-8")
+
+        kroki_url = f"https://kroki.io/mermaid/png/{encoded_diagram}"
+
+        with httpx.Client() as client:
+            response = client.get(kroki_url)
+            response.raise_for_status()
+
+            with open(output_path, "wb") as f:
+                f.write(response.content)
+
+        logging.info(
+            f"Successfully rendered Mermaid diagram to {output_path} using Kroki"
+        )
+        return True
+
+    except Exception as e:
+        logging.error(f"Failed to render Mermaid diagram via Kroki: {e}")
+        try:
+            from PIL import Image, ImageDraw
+
+            img = Image.new("RGB", (600, 300), color=(255, 255, 255))
+            d = ImageDraw.Draw(img)
+            d.text((10, 10), f"Mermaid/Kroki Render Error:\n{e}", fill=(255, 0, 0))
+            img.save(output_path)
+        except Exception as img_e:
+            logging.error(f"Failed to create placeholder image: {img_e}")
+        return False
+
+
+def preprocess_markdown_for_diagrams(markdown_content: str) -> str:
+    """
+    Finds Mermaid code blocks, renders them as images, and replaces
+    the code block with a Markdown image tag.
+    """
+    pattern = r"```mermaid\n([\s\S]+?)\n```"
+
+    mermaid_codes = re.findall(pattern, markdown_content)
+    if not mermaid_codes:
+        return markdown_content
+
+    images_dir = "generated_images"
+    os.makedirs(images_dir, exist_ok=True)
+
+    modified_content = markdown_content
+
+    for i, mermaid_code in enumerate(mermaid_codes):
+        image_filename = f"generated_diagram_{i}.png"
+        output_path = os.path.join(images_dir, image_filename)
+
+        render_mermaid_diagram(mermaid_code, output_path)
+
+        original_block = f"```mermaid\n{mermaid_code}\n```"
+        new_tag = f"![Mermaid Diagram]({output_path})"
+        modified_content = modified_content.replace(original_block, new_tag, 1)
+
+    return modified_content
+
+
 def create_presentation_from_markdown(
     content: str, output_path: str = "output.pptx"
 ) -> str:
+    content = preprocess_markdown_for_diagrams(content)
     prs = Presentation()
     layout_map = {
         "title_slide": prs.slide_layouts[0],
@@ -317,12 +395,14 @@ def create_presentation_from_markdown(
 # --- CORE FUNCTIONS ---
 
 
-def generate_structured_markdown(text: str) -> str:
+def generate_structured_markdown(text: str, api_key: str) -> str:
     """Generates slides markdown using Gemini."""
-    client = genai.Client(api_key=HARDCODED_GEMINI_API_KEY)
+    if not api_key:
+        return "Error: Gemini API key not provided."
+    client = genai.Client(api_key=api_key)
     try:
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             contents=GEMINI_LECTURE_PROMPT + text,
         )
         return response.text
@@ -330,20 +410,23 @@ def generate_structured_markdown(text: str) -> str:
         return f"Gemini API Error: {e}"
 
 
-def generate_podcast_script(raw_text: str) -> List[Dict]:
+def generate_podcast_script(raw_text: str, api_key: str) -> List[Dict]:
     """Generates script (1 API Call) with robust cleanup."""
-    client = genai.Client(api_key=HARDCODED_GEMINI_API_KEY)
-    truncated_text = raw_text[:30000]
+    # if not api_key:
+    #     logging.error("Gemini API key not provided for podcast script generation.")
+    #     return [{"speaker": "Error", "text": "Gemini API key not provided."}]
+    # # the error is here
+    client = genai.Client(api_key=api_key)
+
     try:
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=GEMINI_PODCAST_PROMPT.format(text_content=truncated_text),
+            model="gemini-2.5-flash",
+            contents=GEMINI_PODCAST_PROMPT + raw_text,
             config={"response_mime_type": "application/json"},
         )
+        logging.info(f"Gemini Podcast Script Response: {response.text}")
 
-        # --- FIX: Clean Response Text ---
         text_resp = response.text.strip()
-        # Remove markdown code blocks if present
         if text_resp.startswith("```"):
             text_resp = re.sub(
                 r"^```(json)?|```$", "", text_resp, flags=re.MULTILINE
@@ -351,77 +434,66 @@ def generate_podcast_script(raw_text: str) -> List[Dict]:
 
         script = json.loads(text_resp)
 
-        # Ensure it's a list
         if isinstance(script, dict):
             script = [script]
 
         return script
     except Exception as e:
         logging.error(f"Script Error: {e}")
-        # Return a safe fallback that works with audio generation
         return [
-            {"speaker": "Sascha", "text": "I am having trouble reading this document."},
-            {"speaker": "Marina", "text": "Let's try processing it again."},
+            {
+                "speaker": "Error",
+                "text": f"Could not generate podcast script. Error: {e}",
+            }
         ]
 
 
-async def _synthesize_audio_chunk(text, voice, output_filename):
-    import edge_tts
-
-    # --- FIX: Clean text to avoid TTS errors ---
-    # Remove asterisks, hashtags, or excessive newlines which might confuse the TTS
-    clean_text = re.sub(r"[*#_`]", "", text).strip()
-
-    # If text is empty or meaningless, skip it
-    if not clean_text or not any(c.isalnum() for c in clean_text):
-        logging.warning(f"Skipping empty/invalid text chunk: '{text}'")
+def generate_audio_overview(
+    script: List[Dict], output_path: str, api_key: str, voice_mapping: Dict[str, str]
+):
+    """
+    Generates an audio overview of the script using the Eleven Labs API.
+    voice_mapping should contain speaker names mapped to their voice_ids.
+    """
+    if not api_key:
+        logging.error("Eleven Labs API key is not set.")
         return
 
-    communicate = edge_tts.Communicate(clean_text, voice)
-    await communicate.save(output_filename)
-
-
-def generate_audio_overview(script: List[Dict], output_path: str):
-    import shutil
-
-    temp_dir = "temp_audio_chunks"
-    os.makedirs(temp_dir, exist_ok=True)
-    chunk_files = []
-
     try:
-        loop = asyncio.get_event_loop()
-        for i, line in enumerate(script):
-            text = line.get("text", "")
-            if not text:
-                continue
+        client = ElevenLabs(api_key=api_key)
 
-            # Robust voice selection
-            speaker_name = line.get("speaker", "Sascha")
-            voice = (
-                "en-US-GuyNeural" if speaker_name == "Sascha" else "en-US-JennyNeural"
+        default_voice_id = next(
+            (vid for speaker, vid in voice_mapping.items() if speaker == "Marina"), None
+        )
+        if not default_voice_id:
+            all_voices = client.voices.get_all().voices
+            default_voice_id = next(
+                (v.voice_id for v in all_voices if v.name == "Bella"),
+                all_voices[0].voice_id,
             )
 
-            fname = os.path.join(temp_dir, f"chunk_{i:03d}.mp3")
-
-            try:
-                loop.run_until_complete(_synthesize_audio_chunk(text, voice, fname))
-                if os.path.exists(fname):
-                    chunk_files.append(fname)
-            except Exception as e:
-                logging.error(f"Error generating chunk {i}: {e}")
+        full_audio = b""
+        for line in script:
+            text = line.get("text", "")
+            speaker = line.get("speaker")
+            if not text or not speaker:
                 continue
 
-        if chunk_files:
-            with open(output_path, "wb") as outfile:
-                for f in chunk_files:
-                    with open(f, "rb") as infile:
-                        shutil.copyfileobj(infile, outfile)
-        else:
-            logging.error("No audio chunks generated.")
+            voice_id = voice_mapping.get(speaker, default_voice_id)
 
-    finally:
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
+            audio_stream = client.text_to_speech.convert(
+                text=text, voice_id=voice_id, model_id="eleven_multilingual_v2"
+            )
+
+            for chunk in audio_stream:
+                full_audio += chunk
+
+    except Exception as e:
+        logging.error(f"Error during Eleven Labs audio generation: {e}")
+        return
+
+    with open(output_path, "wb") as f:
+        f.write(full_audio)
 
 
 def extract_content_with_docling(
@@ -429,13 +501,6 @@ def extract_content_with_docling(
 ):
     """
     Extracts content from various file types using the docling library.
-
-    Args:
-        file_path (str): The path to the file to extract content from.
-        page_range (str): Optional page range (e.g., "1-5", "2,4").
-
-    Returns:
-        Dict: A dictionary containing the extracted content.
     """
     suffix = file_path.split(".")[-1]
     try:
@@ -443,19 +508,13 @@ def extract_content_with_docling(
         from docling.datamodel.pipeline_options import (
             PdfPipelineOptions,
             TesseractCliOcrOptions,
-            TesseractOcrOptions,
         )
         from docling.document_converter import DocumentConverter, PdfFormatOption
 
-        # Set lang=["auto"] with a tesseract OCR engine: TesseractOcrOptions, TesseractCliOcrOptions
-        # ocr_options = TesseractOcrOptions(lang=["auto"])
-
         ocr_options = TesseractCliOcrOptions(lang=["eng"])
-
         pipeline_options = PdfPipelineOptions(
             do_ocr=enabled_ocr, do_table_structure=True, ocr_options=ocr_options
         )
-
         doc_converter = DocumentConverter(
             format_options={
                 InputFormat.PDF: PdfFormatOption(
@@ -463,27 +522,23 @@ def extract_content_with_docling(
                 )
             }
         )
-
         doc = doc_converter.convert(file_path).document
 
-        # Apply page range if provided
         if page_range:
             pages = []
             for part in page_range.split(","):
                 if "-" in part:
                     start, end = map(int, part.split("-"))
-                    pages.extend(range(start - 1, end))  # 0-indexed
+                    pages.extend(range(start - 1, end))
                 else:
-                    pages.append(int(part) - 1)  # 0-indexed
+                    pages.append(int(part) - 1)
 
-            # Filter pages
             filtered_content = []
             for i, page in enumerate(doc.pages):
                 if i in pages:
                     filtered_content.append(page.export_to_markdown())
             return "\n".join(filtered_content)
         else:
-            pprint(doc.export_to_markdown())
             return doc.export_to_markdown()
 
     except Exception as e:
@@ -491,8 +546,40 @@ def extract_content_with_docling(
         return {"error": str(e)}
 
 
-def sleep_min(seconds=60):
-    import time
+def time_to_seconds(time_str):
+    """Converts a time string of the format M:S or H:M:S to seconds."""
+    if not time_str:
+        return 0
+    parts = time_str.split(":")
+    if len(parts) == 2:
+        return int(parts[0]) * 60 + int(parts[1])
+    elif len(parts) == 3:
+        return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+    return 0
 
-    logging.info(f"sleeping for {seconds}")
-    time.sleep(seconds)
+
+def extract_content_from_youtube(url: str, start_time: str, end_time: str):
+    """
+    Fetches the transcript of a YouTube video and extracts a specific time range.
+    """
+    try:
+        video_id = url.split("v=")[1]
+        transcript = YouTubeTranscriptApi.get_transcript(video_id)
+
+        start_seconds = time_to_seconds(start_time)
+        end_seconds = time_to_seconds(end_time)
+
+        content = ""
+        for item in transcript:
+            item_start_time = item["start"]
+            if end_seconds:
+                if item_start_time >= start_seconds and item_start_time <= end_seconds:
+                    content += item["text"] + " "
+            elif item_start_time >= start_seconds:
+                content += item["text"] + " "
+
+        return content
+
+    except Exception as e:
+        logging.error(f"Error processing YouTube video: {e}")
+        return f"Error: {e}"

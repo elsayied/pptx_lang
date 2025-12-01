@@ -11,6 +11,8 @@ from google import genai
 from PIL import Image
 from pptx import Presentation
 from pptx.util import Inches
+import asyncio
+from mermaid.py_mermaid import MermaidAPI
 
 # Apply nest_asyncio to allow nested event loops (crucial for Streamlit + edge-tts)
 nest_asyncio.apply()
@@ -49,45 +51,38 @@ Here is the extended Markdown syntax you will use:
 
 3.  **Layouts**: Specify a slide layout with `layout: <layout_name>` on the first line. Supported layouts are: `title_slide`, `title_content` (default), `section_header`, `two_content`, `comparison`, `title_only`, `blank`, `picture_and_caption`.
 
-4.  **Content Types**:
-    *   **Text**: Normal paragraphs.
-    *   **Bullet Points**: Use `-`, `*`, or `+`. Indent for sub-points.
-    *   **Tables**: Standard Markdown table syntax.
-    *   **Images**: `![alt text](path/to/image.png)`. You can also generate images by using the `gemini:` prefix, e.g., `![A generated image](gemini:A futuristic cityscape)`.
-    *   **Code Blocks**: Use standard Markdown fenced code blocks with language identifiers.
-        Example:
-        ```python
-        def factorial(n):
-            if n == 0:
-                return 1
-            else:
-                return n * factorial(n-1)
-        ```
+4.  **Diagrams with Mermaid**: To add a diagram, use a fenced code block with the `mermaid` language identifier. Create diagrams that are clear, well-structured, and visually impressive.
+    *   **Use different shapes**: `A[Client]`, `B(Database)`, `C{Decision}`.
+    *   **Add styles**: Use `classDef` to define styles for nodes and `class` to apply them.
+    *   **Choose the right layout**: `TD` (top-down), `LR` (left-right), etc.
+
+    Example of a beautiful Mermaid diagram:
+    ```mermaid
+    graph TD;
+        subgraph "User Interaction"
+            A[Start] --> B{User Login?};
+            B -- Yes --> C[Access Dashboard];
+            B -- No --> D[Show Login Page];
+        end
+
+        subgraph "Backend Services"
+            C --> E(API Gateway);
+            E --> F[Auth Service];
+            E --> G[Data Service];
+        end
+
+        classDef start-end fill:#2E8B57,stroke:#333,stroke-width:2px,color:#fff;
+        classDef process fill:#4682B4,stroke:#333,stroke-width:2px,color:#fff;
+        classDef decision fill:#DAA520,stroke:#333,stroke-width:2px,color:#fff;
+
+        class A,C start-end;
+        class B decision;
+        class D,E,F,G process;
+    ```
 
 5.  **Speaker Notes**: Add non-visible notes for the presenter inside a `::: notes` block.
-    Example:
-    ::: notes
-    Remind the audience to ask questions at the end of this section.
-    :::
 
-6.  **Multi-Column Layouts** (`two_content`, `comparison`):
-    *   For simple text, you can use `|||` to separate the two columns.
-    *   For more complex content, use `::: column` blocks to define content for each column. This allows mixing text, images, and other elements.
-        Example:
-        ---
-        layout: two_content
-        # Comparing Concepts
-
-        ::: column
-        ### Feature A
-        - Point 1
-        - Point 2
-        :::
-
-        ::: column
-        ![Diagram of B](path/to/diagram.png)
-        A visual representation of Feature B.
-        :::
+6.  **Multi-Column Layouts**: Use `::: column` blocks for complex multi-column content.
 
 Now, take the following text and create a brilliant presentation from it:
 """
@@ -1089,7 +1084,6 @@ The image will be placed at a default position.
     # import os
 
     # os.remove(dummy_text_file)
-
 
 
 def generate_image(prompt: str, output_path: str):
