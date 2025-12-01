@@ -1,0 +1,14 @@
+.venv/
+.vscode/
+L2 Development of Aortic arches.pdf
+L4 treatment of Urinary tract infection.pdf
+__pycache__/
+download_lang_pack.py
+gui.py
+gui2.py
+n
+progress_report.md
+requirements.txt
+settings_page.py
+temp_youtube_fn.py
+try.py
