@@ -79,8 +79,23 @@ Text to transform:
 """
 
 GEMINI_PODCAST_PROMPT = """
-You are a podcast producer. Turn the text into a dialogue script between 'Sascha' and 'Marina'.
-Output JSON ONLY: [{"speaker": "Sascha", "text": "..."}]
+You are an expert JSON-generating AI. Your task is to convert the following text into a podcast dialogue script.
+
+The script should be a dialogue between two speakers: 'Sascha' and 'Marina'.
+
+The output MUST be a valid JSON array of objects. Each object in the array represents a line of dialogue and must have two keys:
+1. "speaker": A string, either "Sascha" or "Marina".
+2. "text": A string containing the dialogue.
+
+Do NOT output any text, explanation, or code formatting (like ```json) before or after the JSON array.
+
+Here is an example of the required output format:
+[
+  {"speaker": "Sascha", "text": "Welcome to the show, Marina."},
+  {"speaker": "Marina", "text": "It's great to be here!"}
+]
+
+Now, convert the following text into the specified JSON format:
 
 Text:
 {text_content}
@@ -412,10 +427,6 @@ def generate_structured_markdown(text: str, api_key: str) -> str:
 
 def generate_podcast_script(raw_text: str, api_key: str, prompt: str = None) -> List[Dict]:
     """Generates script (1 API Call) with robust cleanup."""
-    # if not api_key:
-    #     logging.error("Gemini API key not provided for podcast script generation.")
-    #     return [{"speaker": "Error", "text": "Gemini API key not provided."}]
-    # # the error is here
     client = genai.Client(api_key=api_key)
 
     try:
@@ -439,16 +450,28 @@ def generate_podcast_script(raw_text: str, api_key: str, prompt: str = None) -> 
 
         script = json.loads(text_resp)
 
-        if isinstance(script, dict):
-            script = [script]
+        # Validate script structure
+        if not isinstance(script, list):
+            raise ValueError("API did not return a JSON list.")
+        for item in script:
+            if not isinstance(item, dict) or "speaker" not in item or "text" not in item:
+                raise ValueError("JSON items do not have 'speaker' and 'text' keys.")
 
         return script
-    except Exception as e:
-        logging.error(f"Script Error: {e}")
+    except (json.JSONDecodeError, ValueError) as e:
+        logging.error(f"Script validation or parsing error: {e}")
         return [
             {
                 "speaker": "Error",
-                "text": f"Could not generate podcast script. Error: {e}",
+                "text": f"Could not generate or parse podcast script. The AI response was not in the expected format. Error: {e}",
+            }
+        ]
+    except Exception as e:
+        logging.error(f"An unexpected script error occurred: {e}")
+        return [
+            {
+                "speaker": "Error",
+                "text": f"Could not generate podcast script. An unexpected error occurred: {e}",
             }
         ]
 
