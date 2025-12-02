@@ -428,7 +428,7 @@ def generate_structured_markdown(text: str, api_key: str) -> str:
 def generate_podcast_script(raw_text: str, api_key: str, prompt: str = None) -> List[Dict]:
     """Generates script (1 API Call) with robust cleanup."""
     client = genai.Client(api_key=api_key)
-
+    text_resp = "" # Initialize in case the API call fails before assignment
     try:
         if prompt:
             final_prompt = prompt.format(text_content=raw_text)
@@ -440,9 +440,10 @@ def generate_podcast_script(raw_text: str, api_key: str, prompt: str = None) -> 
             contents=final_prompt,
             config={"response_mime_type": "application/json"},
         )
-        logging.info(f"Gemini Podcast Script Response: {response.text}")
-
+        
         text_resp = response.text.strip()
+        logging.info(f"Gemini Raw Response: {text_resp}") # Log the raw response
+
         if text_resp.startswith("```"):
             text_resp = re.sub(
                 r"^```(json)?|```$", "", text_resp, flags=re.MULTILINE
@@ -460,6 +461,7 @@ def generate_podcast_script(raw_text: str, api_key: str, prompt: str = None) -> 
         return script
     except (json.JSONDecodeError, ValueError) as e:
         logging.error(f"Script validation or parsing error: {e}")
+        logging.error(f"Problematic AI response was: {text_resp}")
         return [
             {
                 "speaker": "Error",
@@ -468,6 +470,7 @@ def generate_podcast_script(raw_text: str, api_key: str, prompt: str = None) -> 
         ]
     except Exception as e:
         logging.error(f"An unexpected script error occurred: {e}")
+        logging.error(f"AI response at time of error was: {text_resp}")
         return [
             {
                 "speaker": "Error",
