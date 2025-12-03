@@ -9,6 +9,8 @@ gui2.py
 n
 progress_report.md
 requirements.txt
-settings_page.py
 temp_youtube_fn.py
 try.py
+api_keys.json
+secerts.json
+presentation.md

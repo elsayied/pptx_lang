@@ -1,4 +1,5 @@
 # streamlit_app.py
+import json
 import os
 import tempfile
 
@@ -20,6 +21,7 @@ from settings_page import settings_page
 
 # --- Session State ---
 def init_session_state():
+    load_api_keys()
     if "markdown_editor" not in st.session_state:
         st.session_state["markdown_editor"] = ""
     if "raw_extracted_content" not in st.session_state:
@@ -36,6 +38,21 @@ def init_session_state():
         st.session_state["voice_mapping"] = {"Sascha": "Rachel", "Marina": "Bella"}
 
 
+def load_api_keys():
+    if os.path.exists("api_keys.json"):
+        with open("api_keys.json", "r") as f:
+            try:
+                api_keys = json.load(f)
+                if "gemini_api_key" in api_keys:
+                    st.session_state["gemini_api_key"] = api_keys["gemini_api_key"]
+                if "elevenlabs_api_key" in api_keys:
+                    st.session_state["elevenlabs_api_key"] = api_keys[
+                        "elevenlabs_api_key"
+                    ]
+            except json.JSONDecodeError:
+                pass  # Ignore if the file is not a valid JSON
+
+
 # --- Content Import ---
 def import_file_content(uploaded_file, page_range):
     if not uploaded_file:
@@ -49,7 +66,8 @@ def import_file_content(uploaded_file, page_range):
             uploaded_file.seek(0)
             with open(temp_path, "wb") as f:
                 f.write(uploaded_file.read())
-            content = extract_content_with_docling(temp_path, page_range=page_range)
+            ocr_enabled = st.session_state.get("ocr_enabled", True) # Get OCR setting
+            content = extract_content_with_docling(temp_path, page_range=page_range, enabled_ocr=ocr_enabled)
 
             if isinstance(content, dict) and "error" in content:
                 st.error(f"Failed to extract content: {content['error']}")
@@ -84,7 +102,8 @@ def import_from_url(url, page_range):
                 with open(temp_path, "wb") as f:
                     f.write(response.content)
 
-            content = extract_content_with_docling(temp_path, page_range=page_range)
+            ocr_enabled = st.session_state.get("ocr_enabled", True) # Get OCR setting
+            content = extract_content_with_docling(temp_path, page_range=page_range, enabled_ocr=ocr_enabled)
 
             if isinstance(content, dict) and "error" in content:
                 st.error(f"Failed to extract content: {content['error']}")
@@ -128,37 +147,89 @@ def generate_slides_content():
 
 def generate_audio_logic():
     raw = st.session_state.get("raw_extracted_content", "")
-    api_key = st.session_state.get("elevenlabs_api_key")
+    elevenlabs_api_key = st.session_state.get("elevenlabs_api_key")
     voice_mapping = st.session_state.get("voice_mapping")
+    tts_engine = st.session_state.get("tts_engine", "Eleven Labs")
+    podcast_prompt = st.session_state.get("podcast_prompt")
 
     if not raw:
         st.error("No content.")
-        return
-    if not api_key:
-        st.error("Eleven Labs API key is not set. Please set it in the Settings page.")
         return
 
     gemini_api_key = st.session_state.get("gemini_api_key")
     if not gemini_api_key:
         st.error("Gemini API key is not set. Please set it in the Settings page.")
         return
-    print(f"{gemini_api_key = }")
-    with st.spinner("🎧 Generating Script (1 Call)..."):
-        script = generate_podcast_script(raw, gemini_api_key)
-        st.session_state["podcast_script"] = script
-        from pprint import pprint
 
-        pprint(f"{script = }")
-    # Check for errors from the script generation
+    with st.spinner("🎧 Generating Script (1 Call)..."):
+        script = generate_podcast_script(raw, gemini_api_key, prompt=podcast_prompt)
+        st.session_state["podcast_script"] = script
+
     if script and script[0].get("speaker") == "Error":
         st.error(script[0].get("text"))
         return
 
     with st.spinner("🎙️ Synthesizing Audio..."):
         temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-        generate_audio_overview(script, temp_audio.name, api_key, voice_mapping)
-        st.session_state["audio_path"] = temp_audio.name
-        st.success("✅ Audio Ready")
+        success = False
+
+        if tts_engine == "Eleven Labs":
+            if not elevenlabs_api_key:
+                st.error(
+                    "Eleven Labs API key is not set. Please set it in the Settings page."
+                )
+                return
+
+            result = generate_audio_overview(
+                script, temp_audio.name, elevenlabs_api_key, voice_mapping
+            )
+
+            if result is True:
+                success = True
+            elif result == "credit_error":
+                st.warning("Eleven Labs credit issue. Falling back to Kokoro TTS.")
+                try:
+                    from kokoro_utils import (
+                        KOKORO_AVAILABLE,
+                        generate_audio_overview_kokoro,
+                    )
+
+                    if not KOKORO_AVAILABLE:
+                        st.error(
+                            "Kokoro TTS is not installed. Cannot fallback for audio generation."
+                        )
+                        return
+                    success = generate_audio_overview_kokoro(script, temp_audio.name)
+                except ImportError:
+                    st.error(
+                        "kokoro_utils.py not found. Cannot fallback for audio generation."
+                    )
+                    return
+
+        elif tts_engine == "Kokoro":
+            try:
+                from kokoro_utils import (
+                    KOKORO_AVAILABLE,
+                    generate_audio_overview_kokoro,
+                )
+
+                if not KOKORO_AVAILABLE:
+                    st.error(
+                        "Kokoro TTS is not installed. Please install it to use this feature."
+                    )
+                    return
+                success = generate_audio_overview_kokoro(script, temp_audio.name)
+            except ImportError:
+                st.error(
+                    "kokoro_utils.py not found. Cannot use Kokoro for audio generation."
+                )
+                return
+
+        if success:
+            st.session_state["audio_path"] = temp_audio.name
+            st.success("✅ Audio Ready")
+        else:
+            st.error("Failed to generate audio.")
 
 
 # --- UI ---
@@ -167,38 +238,52 @@ def main_app_ui():
     st.title("📄 Gemini-Powered Presentation Generator")
 
     st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go to", ["App", "Settings"])
+    page = st.sidebar.radio("Go to", ["Create Presentation", "App Settings"])
 
-    if page == "App":
+    if page == "Create Presentation":
         app_page()
-    elif page == "Settings":
+    elif page == "App Settings":
         settings_page()
 
 
 def app_page():
     # 1. Import
-    st.header("1. Extract Content")
+    st.header("1. Get Your Content Ready")
+    st.markdown(
+        "Upload a document (PDF, Word, or text file) or provide a URL to a webpage or YouTube video. This is the first step to create your presentation!"
+    )
     col1, col2 = st.columns([3, 1])
     with col1:
-        file_up = st.file_uploader("Upload File", type=["pdf", "docx", "txt"])
+        file_up = st.file_uploader(
+            "Upload a document (PDF, DOCX, TXT)", type=["pdf", "docx", "txt"]
+        )
     with col2:
-        page_range_input = st.text_input("Page range (e.g., 1-3, 5)")
+        page_range_input = st.text_input(
+            "Which pages? (e.g., '1-3' or '5')",
+            help="Specify a range like '1-3' for pages 1 to 3, or '5' for just page 5. Leave blank for all pages.",
+        )
 
-    if st.button("Import File") and file_up:
+    if st.button("Load from File") and file_up:
         import_file_content(file_up, page_range_input)
 
     with st.form("url_form"):
-        url = st.text_input("Or Enter URL")
-        if st.form_submit_button("Import URL"):
+        url = st.text_input("Or, paste a Web Page Link here")
+        if st.form_submit_button("Load from Web Link"):
             import_from_url(url, page_range_input)
 
     with st.form("youtube_form"):
-        youtube_url = st.text_input("Or Enter YouTube URL")
-        start_time = st.text_input("Start time (e.g., 0:00)")
-        end_time = st.text_input("End time (e.g., 1:30)")
-        if st.form_submit_button("Import from YouTube"):
+        youtube_url = st.text_input("Or, paste a YouTube Video Link here")
+        start_time = st.text_input(
+            "Start time (e.g., 0:00)",
+            help="Optional: Start extracting content from this point in the video.",
+        )
+        end_time = st.text_input(
+            "End time (e.g., 1:30)",
+            help="Optional: Stop extracting content at this point in the video.",
+        )
+        if st.form_submit_button("Load from YouTube Video"):
             if youtube_url:
-                with st.spinner("Fetching YouTube transcript..."):
+                with st.spinner("Grabbing the video transcript..."):
                     content = extract_content_from_youtube(
                         youtube_url, start_time, end_time
                     )
@@ -206,15 +291,20 @@ def app_page():
                         st.session_state["raw_extracted_content"] = content
                         st.session_state["markdown_editor"] = ""
                         st.session_state["audio_path"] = ""
-                        st.success("✅ Content Extracted from YouTube")
+                        st.success("✅ Content pulled from YouTube!")
                     else:
-                        st.error("Could not extract content from YouTube.")
+                        st.error(
+                            "Couldn't get content from YouTube. Please check the link."
+                        )
             else:
-                st.error("Please enter a YouTube URL.")
+                st.error("Please enter a YouTube video link.")
 
-    # 1.5 Audio
+    # 2. Audio
     st.markdown("---")
-    st.header("🎧 Audio Overview")
+    st.header("2. Create Audio Summary (Optional)")
+    st.markdown(
+        "Want an audio overview of your content? Our AI can generate a podcast-style summary!"
+    )
     if len(st.session_state.get("raw_extracted_content", "")) > 0:
         if st.button("Generate Audio Overview", icon="🎙️"):
             generate_audio_logic()
@@ -226,26 +316,39 @@ def app_page():
                 for l in st.session_state["podcast_script"]:
                     st.write(f"**{l.get('speaker')}**: {l.get('text')}")
     else:
-        st.info("Import content first.")
+        st.info(
+            "Ready to hear a summary? First, get your content using the options above (Step 1)."
+        )
 
-    # 2. Slides
+    # 3. Slides
     st.markdown("---")
-    st.header("2. Generate Slides")
+    st.header("3. Generate Your Presentation Slides")
+    st.markdown(
+        "Click below to magically turn your extracted content into a structured presentation outline!"
+    )
     if st.button("🚀 Generate Slides"):
-        st.warning("⚠️ Wait 20s if you just generated audio (3 RPM Limit).")
+        st.warning(
+            "Just generated audio? Please wait a moment (around 20 seconds) before generating slides to avoid overloading the system."
+        )
         generate_slides_content()
 
-    # 3. Editor
-    st.header("3. Edit Markdown")
+    # 4. Editor
+    st.header("4. Review and Edit Your Slides")
+    st.markdown(
+        "Here's your presentation outline. Feel free to make any changes or corrections directly in this editor!"
+    )
     st.text_area(
-        "Content",
+        "Slide Content (Markdown)",
         value=st.session_state.get("markdown_editor", ""),
         height=400,
         key="markdown_editor",
     )
 
-    # 4. Download
-    st.header("4. Download PPTX")
+    # 5. Download
+    st.header("5. Get Your Presentation File!")
+    st.markdown(
+        "All done! Click the button below to download your generated presentation as a PowerPoint (.pptx) file."
+    )
     if st.button("Generate PPTX"):
         out = tempfile.NamedTemporaryFile(delete=False, suffix=".pptx").name
         create_presentation_from_markdown(st.session_state["markdown_editor"], out)
