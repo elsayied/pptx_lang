@@ -2,7 +2,7 @@ streamlit
 httpx
 nest-asyncio
 elevenlabs
-google-generativeai
+google-genai
 python-pptx
 youtube-transcript-api
 numpy
