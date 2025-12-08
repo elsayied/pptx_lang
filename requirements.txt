@@ -8,3 +8,14 @@ youtube-transcript-api
 numpy
 soundfile
 kokoro-tts
+docling[pdf,pptx]
+pandas
+streamlit-searchbox
+fuzzywuzzy
+python-Levenshtein
+torch
+diffusers
+transformers
+accelerate
+chromadb
+sentence-transformers

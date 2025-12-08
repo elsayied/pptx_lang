@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import zlib
+import tempfile
 from pprint import pprint
 from typing import Dict, List
 
@@ -15,6 +16,10 @@ from google import genai
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from youtube_transcript_api import YouTubeTranscriptApi
+
+import torch
+from diffusers import ZImagePipeline
+from transformers import pipeline
 
 # Apply nest_asyncio to allow nested event loops
 nest_asyncio.apply()
@@ -46,37 +51,21 @@ Syntax:
 3. `layout: title_content` (or others) on first line.
 4. `::: notes` for speaker notes.
 5. `::: column` for columns.
-6. **Diagrams with Mermaid**: To add a diagram, use a fenced code block with the `mermaid` language identifier. Create diagrams that are clear, well-structured, and visually impressive.
-    *   **Use different shapes**: `A[Client]`, `B(Database)`, `C{Decision}`.
-    *   **Add styles**: Use `classDef` to define styles for nodes and `class` to apply them.
-    *   **Choose the right layout**: `TD` (top-down), `LR` (left-right), etc.
+6. '::: generate_infograph' for descrpations of infograph to generate that will be used for Z image turbo style
+### Guides on descrpations of infographics
+'''
+You are an expert AI Infographic Designer. Your task is to generate a single, highly detailed text-to-image prompt for the Z-Image-Turbo model using the 'Container Method'.
 
-    Example of a beautiful Mermaid diagram:
-    ```mermaid
-    graph TD;
-        subgraph "User Interaction"
-            A[Start] --> B{User Login?};
-            B -- Yes --> C[Access Dashboard];
-            B -- No --> D[Show Login Page];
-        end
-
-        subgraph "Backend Services"
-            C --> E(API Gateway);
-            E --> F[Auth Service];
-            E --> G[Data Service];
-        end
-
-        classDef start-end fill:#2E8B57,stroke:#333,stroke-width:2px,color:#fff;
-        classDef process fill:#4682B4,stroke:#333,stroke-width:2px,color:#fff;
-        classDef decision fill:#DAA520,stroke:#333,stroke-width:2px,color:#fff;
-
-        class A,C start-end;
-        class B decision;
-        class D,E,F,G process;
-    ```
+The infographic must be about {text}, and strictly adhere to the following rules:
+1.  **Layout:** A **Horizontal Process Flow Diagram** with four distinct, labeled anatomical sections connected by **thick, color-coded medical arrows**.
+2.  **Style:** A **clinical, schematic, diagrammatic illustration** style, similar to **Servier Medical Art (SMART)**, using **high-precision anatomical accuracy** and a **sterile blue, deep crimson, and stark white** color palette.
+3.  **Text Rendering:** All essential text labels, including anatomical and process names, must be wrapped in **double quotes**.
+'''
+Generate only the complete, single-line prompt string inside '::: generate_infograph' ':::'
 
 Text to transform:
-"""
+
+"
 
 GEMINI_PODCAST_PROMPT = """
 You are an expert JSON-generating AI. Your task is to convert the following text into a podcast dialogue script.
@@ -99,7 +88,7 @@ Now, convert the following text into the specified JSON format:
 
 Text:
 {text_content}
-"""
+""")
 
 # --- HELPER FUNCTIONS ---
 
@@ -122,7 +111,7 @@ def create_table_from_markdown(text: str) -> List[List[str]]:
 
 def add_formatted_text_runs(paragraph, text, bold=False, italic=False, underline=False):
     parts = re.split(
-        r"(\*\*\*[\s\S]+?\*\*\*|\*\*[\s\S]+?\*\*|\*[\s\S]+?\*|__[\s\S]+?__)", text
+        r"(\\\*\\*\\*[\\s\\S]+?\\*\\*\\*|\\*\\*[\\s\\S]+?\\*\\*|\\*[\\s\\S]+?\\*|__[\\s\\S]+?__)", text
     )
     if len(parts) == 1:
         if text:
@@ -157,7 +146,6 @@ def add_formatted_text_runs(paragraph, text, bold=False, italic=False, underline
                 paragraph, part, bold=bold, italic=italic, underline=underline
             )
 
-
 def add_bullet_points_from_markdown(text_frame, points: str):
     if not text_frame.text.strip():
         text_frame.text = ""
@@ -177,10 +165,9 @@ def add_bullet_points_from_markdown(text_frame, points: str):
         add_formatted_text_runs(p, text)
         p.level = min(level, 8)
 
-
-def parse_markdown_to_slides(content: str) -> List[Dict]:
+def parse_markdown_to_slides(content: str, gemini_api_key: str = None, colab_mode: bool = False) -> List[Dict]:
     slides = []
-    slide_contents = re.split(r"\n---\n", content)
+    slide_contents = re.split(r"\n---\\n", content)
     for slide_content in slide_contents:
         if not slide_content.strip():
             continue
@@ -250,8 +237,31 @@ def parse_markdown_to_slides(content: str) -> List[Dict]:
                 )
                 line_idx += 1
                 continue
+            
+            # Handle Z-Image-Turbo integration
+            if stripped.startswith("::: generate_infograph"):
+                infograph_prompt_lines = []
+                line_idx += 1 # Move past the '::: generate_infograph' line
+                while line_idx < len(lines) and not lines[line_idx].strip() == ":::":
+                    infograph_prompt_lines.append(lines[line_idx])
+                    line_idx += 1
+                infograph_prompt = "\n".join(infograph_prompt_lines).strip()
+                
+                if infograph_prompt:
+                    logging.info(f"Generating Z-Image-Turbo image for prompt: {infograph_prompt}")
+                    image_path = generate_image_turbo(infograph_prompt, gemini_api_key, colab_mode)
+                    if not image_path.startswith("Error"):
+                        curr.append({"type": "image", "content": f"![Infographic]({image_path})"})
+                    else:
+                        logging.error(f"Failed to generate Z-Image-Turbo: {image_path}")
+                        curr.append({"type": "text", "content": f"ERROR: Could not generate infographic: {image_path}"})
+                else:
+                    logging.warning("Empty infograph prompt found.")
+                line_idx += 1 # Move past the ':::' line
+                continue
 
-            if re.match(r"^\s*!\[.*\]\(.*\)\s*$", line):
+
+            if re.match(r"^\s*!\[.*\]\(.*\\)\s*$", line):
                 curr.append({"type": "image", "content": line.strip()})
                 line_idx += 1
                 continue
@@ -278,7 +288,7 @@ def parse_markdown_to_slides(content: str) -> List[Dict]:
                 if (
                     not curr_s
                     or curr_l.lstrip().startswith(("-", "*", "+"))
-                    or re.match(r"^\s*!\[.*\]\(.*\)\s*$", curr_l)
+                    or re.match(r"^\s*!\[.*\]\(.*\\)\s*$", curr_l)
                     or curr_s.startswith(("```", ":::"))
                 ):
                     break
@@ -288,7 +298,6 @@ def parse_markdown_to_slides(content: str) -> List[Dict]:
                 curr.append({"type": "text", "content": "\n".join(text_lines)})
         slides.append(slide_data)
     return slides
-
 
 def render_mermaid_diagram(mermaid_code: str, output_path: str):
     """Renders a Mermaid diagram using the Kroki.io service."""
@@ -301,7 +310,7 @@ def render_mermaid_diagram(mermaid_code: str, output_path: str):
 
         with httpx.Client() as client:
             response = client.get(kroki_url)
-            response.raise_for_status()
+            response.raise_for_status() # Raise an exception for bad status codes
 
             with open(output_path, "wb") as f:
                 f.write(response.content)
@@ -323,7 +332,6 @@ def render_mermaid_diagram(mermaid_code: str, output_path: str):
         except Exception as img_e:
             logging.error(f"Failed to create placeholder image: {img_e}")
         return False
-
 
 def preprocess_markdown_for_diagrams(markdown_content: str) -> str:
     """
@@ -353,9 +361,8 @@ def preprocess_markdown_for_diagrams(markdown_content: str) -> str:
 
     return modified_content
 
-
 def create_presentation_from_markdown(
-    content: str, output_path: str = "output.pptx"
+    content: str, output_path: str = "output.pptx", gemini_api_key: str = None, colab_mode: bool = False
 ) -> str:
     content = preprocess_markdown_for_diagrams(content)
     prs = Presentation()
@@ -369,7 +376,7 @@ def create_presentation_from_markdown(
         "blank": prs.slide_layouts[6],
         "picture_and_caption": prs.slide_layouts[8],
     }
-    slides_data = parse_markdown_to_slides(content)
+    slides_data = parse_markdown_to_slides(content, gemini_api_key, colab_mode)
 
     for slide_data in slides_data:
         layout = layout_map.get(slide_data["layout"], layout_map["title_content"])
@@ -424,60 +431,205 @@ def generate_structured_markdown(text: str, api_key: str) -> str:
     except Exception as e:
         return f"Gemini API Error: {e}"
 
+def generate_gemini_response(
+    text: str, api_key: str, config: Dict[str, str] | None = None
+) -> str:
+    """Generates a response using Gemini."""
 
-def generate_podcast_script(raw_text: str, api_key: str, prompt: str = None) -> List[Dict]:
-    """Generates script (1 API Call) with robust cleanup."""
     client = genai.Client(api_key=api_key)
-    text_resp = "" # Initialize in case the API call fails before assignment
     try:
-        if prompt:
-            final_prompt = prompt.format(text_content=raw_text)
-        else:
-            final_prompt = GEMINI_PODCAST_PROMPT.format(text_content=raw_text)
-
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=final_prompt,
-            config={"response_mime_type": "application/json"},
+            model="gemini-2.5-flash", contents=text, config=config
         )
-        
-        text_resp = response.text.strip()
-        logging.info(f"Gemini Raw Response: {text_resp}") # Log the raw response
-
-        if text_resp.startswith("```"):
-            text_resp = re.sub(
-                r"^```(json)?|```$", "", text_resp, flags=re.MULTILINE
-            ).strip()
-
-        script = json.loads(text_resp)
-
-        # Validate script structure
-        if not isinstance(script, list):
-            raise ValueError("API did not return a JSON list.")
-        for item in script:
-            if not isinstance(item, dict) or "speaker" not in item or "text" not in item:
-                raise ValueError("JSON items do not have 'speaker' and 'text' keys.")
-
-        return script
-    except (json.JSONDecodeError, ValueError) as e:
-        logging.error(f"Script validation or parsing error: {e}")
-        logging.error(f"Problematic AI response was: {text_resp}")
-        return [
-            {
-                "speaker": "Error",
-                "text": f"Could not generate or parse podcast script. The AI response was not in the expected format. Error: {e}",
-            }
-        ]
+        # reponse.raise_for_status()
+        return response
     except Exception as e:
-        logging.error(f"An unexpected script error occurred: {e}")
-        logging.error(f"AI response at time of error was: {text_resp}")
-        return [
-            {
-                "speaker": "Error",
-                "text": f"Could not generate podcast script. An unexpected error occurred: {e}",
-            }
-        ]
+        return f"Gemini API Error: {e}"
 
+def generate_infographic_script(text: str, api_key: str):
+    """"""
+    PROMPT = f"""
+        You are an expert AI Infographic Designer. Your task is to generate a single, highly detailed text-to-image prompt for the Z-Image-Turbo model using the 'Container Method'.
+
+        The infographic must be about {text}, and strictly adhere to the following rules:
+        1.  **Layout:** A **Horizontal Process Flow Diagram** with four distinct, labeled anatomical sections connected by **thick, color-coded medical arrows**.
+        2.  **Style:** A **clinical, schematic, diagrammatic illustration** style, similar to **Servier Medical Art (SMART)**, using **high-precision anatomical accuracy** and a **sterile blue, deep crimson, and stark white** color palette.
+        3.  **Text Rendering:** All essential text labels, including anatomical and process names, must be wrapped in **double quotes**.
+
+        Generate only the complete, single-line prompt string.
+        """
+    response = generate_gemini_response(PROMPT, api_key)
+    return response.text
+
+def generate_image_turbo_local(prompt: str) -> str:
+    """
+    Generates an image using the local Z-Image-Turbo model and saves it to a temporary file.
+    Returns the file path.
+    """
+    try:
+        # Use bfloat16 for optimal performance on supported GPUs if available, otherwise use float16 or float32
+        if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8: # A100, H100, etc.
+            dtype = torch.bfloat16
+        else:
+            dtype = torch.float16
+
+        pipe = ZImagePipeline.from_pretrained(
+            "Tongyi-MAI/Z-Image-Turbo",
+            torch_dtype=dtype
+        )
+        if torch.cuda.is_available():
+            pipe = pipe.to("cuda") # Move the pipeline to GPU if available
+
+        image = pipe(
+            prompt=prompt,
+            num_inference_steps=8, # Recommended for Z-Image-Turbo
+            guidance_scale=2.0,    # A lower guidance scale is often suitable for turbo models
+        ).images[0]
+
+        # Save to a temporary file
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png", prefix="z_image_turbo_")
+        image.save(temp_file.name)
+        temp_file.close()
+        return temp_file.name
+    except Exception as e:
+        logging.error(f"Error generating image with local Z-Image-Turbo: {e}")
+        return f"Error generating image locally: {e}"
+
+
+# generic asynico flow
+def generate_image_turbo(text: str, api_key: str, colab_mode: bool = False):
+    import requests
+
+    Z_IMAGE_PROMPT = generate_infographic_script(text, api_key)
+
+    if colab_mode:
+        logging.info("Generating image using local Z-Image-Turbo model...")
+        image_path = generate_image_turbo_local(Z_IMAGE_PROMPT)
+        return image_path
+    else:
+        # --- CONFIGURATION ---
+        API_ENDPOINT = "https://api-inference.modelscope.cn/v1/images/generations"
+        STATUS_ENDPOINT = "https://api-inference.modelscope.cn/v1/tasks"
+        TOKEN = "ms-c3e9e804-9a9e-4b42-b700-86d1118a2fa4"  # Replace with your actual token
+        HEADERS = {
+            "Authorization": f"Bearer {TOKEN}",
+            "Content-Type": "application/json",
+            "X-ModelScope-Async-Mode": "true",
+        }
+
+        PAYLOAD = {
+            "model": "Tongyi-MAI/Z-Image-Turbo",
+            "prompt": Z_IMAGE_PROMPT,
+            "size": "1024*1024",
+            "n": 1,
+            "num_inference_steps": 9,  # Optimal step count for Turbo
+        }
+
+        # --- STEP 1: Submit Task ---
+        print("Submitting Z-Image-Turbo task...")
+        try:
+            response = requests.post(
+                API_ENDPOINT, headers=HEADERS, data=json.dumps(PAYLOAD)
+            )
+            response.raise_for_status()  # Raise an exception for bad status codes
+
+            task_data = response.json()
+            task_id = task_data.get("data", {}).get("task_id")
+
+            if not task_id:
+                print("Error: Could not retrieve task_id from submission response.")
+                print(task_data)
+                exit()
+
+            print(f"Task submitted successfully. Task ID: {task_id}")
+
+            # --- STEP 2: Poll for Results ---
+            print("Polling for result...")
+            status = "PROCESSING"
+
+            while status in ["PROCESSING", "IN_QUEUE"]:
+                time.sleep(5)  # Wait 5 seconds before polling again
+
+                status_response = requests.get(
+                    f"{STATUS_ENDPOINT}/{task_id}", headers=HEADERS
+                )
+                status_response.raise_for_status()
+                status_data = status_response.json()
+
+                status = status_data.get("data", {}).get("task_status")
+                print(f"Current Status: {status}")
+
+                if status == "COMPLETED":
+                    image_url = status_data.get("data", {}).get("output_urls", [None])[0]
+                    print("\n✅ Image Generation COMPLETED!")
+                    print(f"Generated Image URL: {image_url}")
+                    return image_url
+
+                elif status == "FAILED":
+                    print("\n❌ Image Generation FAILED.")
+                    print(status_data)
+                    return "Error: Image generation failed."
+
+        except requests.exceptions.RequestException as e:
+            print(f"An error occurred during API communication: {e}")
+            return f"Error: An error occurred during API communication: {e}"
+
+def generate_podcast_script(
+    raw_text: str, api_key: str, prompt: str = ""
+) -> List[Dict]:
+    """Generates script (1 API Call) with robust cleanup."""
+    text_resp = ""  # Initialize in case the API call fails before assignment
+    print("inside ----- generate_podcast_script  func ----- ")
+    # try:
+
+    # readable []
+    if prompt:
+        final_prompt = prompt + raw_text
+    else:
+        final_prompt = GEMINI_PODCAST_PROMPT + raw_text
+
+    response = generate_gemini_response(
+        final_prompt, api_key, config={"response_mime_type": "application/json"}
+    )
+
+    text_resp = response.text.strip()
+    logging.info(f"Gemini Raw Response: {text_resp}")  # Log the raw response
+
+    if text_resp.startswith("```"):
+        text_resp = re.sub(
+            r"^```(json)?|```$", "", text_resp, flags=re.MULTILINE
+        ).strip()
+
+    script = json.loads(text_resp)
+
+    # Validate script structure
+    if not isinstance(script, list):
+        raise ValueError("API did not return a JSON list.")
+    for item in script:
+        if not isinstance(item, dict) or "speaker" not in item or "text" not in item:
+            raise ValueError("JSON items do not have 'speaker' and 'text' keys.")
+
+    return script
+
+
+# except (json.JSONDecodeError, ValueError) as e:
+#     logging.error(f"Script validation or parsing error: {e}")
+#     logging.error(f"Problematic AI response was: {text_resp}")
+#     return [
+#         {
+#             "speaker": "Error",
+#             "text": f"Could not generate or parse podcast script. The AI response was not in the expected format. Error: {e}",
+#         }
+#     ]
+# except Exception as e:
+#     logging.error(f"An unexpected script error occurred: {e}")
+#     logging.error(f"AI response at time of error was: {text_resp}")
+#     return [
+#         {
+#             "speaker": "Error",
+            "text": f"Could not generate podcast script. An unexpected error occurred: {e}",
+#         }
+#     ]
 
 def generate_audio_overview(
     script: List[Dict], output_path: str, api_key: str, voice_mapping: Dict[str, str]
@@ -534,7 +686,6 @@ def generate_audio_overview(
         f.write(full_audio)
     return True
 
-
 def extract_content_with_docling(
     file_path: str, enabled_ocr=True, page_range: str = None
 ):
@@ -584,7 +735,6 @@ def extract_content_with_docling(
         print(f"Error extracting content with docling from {file_path}: {e}")
         return {"error": str(e)}
 
-
 def time_to_seconds(time_str):
     """Converts a time string of the format M:S or H:M:S to seconds."""
     if not time_str:
@@ -595,7 +745,6 @@ def time_to_seconds(time_str):
     elif len(parts) == 3:
         return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
     return 0
-
 
 def extract_content_from_youtube(url: str, start_time: str, end_time: str):
     """
