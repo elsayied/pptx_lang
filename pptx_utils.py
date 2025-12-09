@@ -4,8 +4,8 @@ import json
 import logging
 import os
 import re
-import zlib
 import tempfile
+import zlib
 from pprint import pprint
 from typing import Dict, List
 
@@ -16,10 +16,6 @@ from google import genai
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from youtube_transcript_api import YouTubeTranscriptApi
-
-import torch
-from diffusers import ZImagePipeline
-from transformers import pipeline
 
 # Apply nest_asyncio to allow nested event loops
 nest_asyncio.apply()
@@ -65,7 +61,7 @@ Generate only the complete, single-line prompt string inside '::: generate_infog
 
 Text to transform:
 
-"
+"""
 
 GEMINI_PODCAST_PROMPT = """
 You are an expert JSON-generating AI. Your task is to convert the following text into a podcast dialogue script.
@@ -88,7 +84,7 @@ Now, convert the following text into the specified JSON format:
 
 Text:
 {text_content}
-""")
+"""
 
 # --- HELPER FUNCTIONS ---
 
@@ -111,7 +107,8 @@ def create_table_from_markdown(text: str) -> List[List[str]]:
 
 def add_formatted_text_runs(paragraph, text, bold=False, italic=False, underline=False):
     parts = re.split(
-        r"(\\\*\\*\\*[\\s\\S]+?\\*\\*\\*|\\*\\*[\\s\\S]+?\\*\\*|\\*[\\s\\S]+?\\*|__[\\s\\S]+?__)", text
+        r"(\\\*\\*\\*[\\s\\S]+?\\*\\*\\*|\\*\\*[\\s\\S]+?\\*\\*|\\*[\\s\\S]+?\\*|__[\\s\\S]+?__)",
+        text,
     )
     if len(parts) == 1:
         if text:
@@ -146,6 +143,7 @@ def add_formatted_text_runs(paragraph, text, bold=False, italic=False, underline
                 paragraph, part, bold=bold, italic=italic, underline=underline
             )
 
+
 def add_bullet_points_from_markdown(text_frame, points: str):
     if not text_frame.text.strip():
         text_frame.text = ""
@@ -165,7 +163,8 @@ def add_bullet_points_from_markdown(text_frame, points: str):
         add_formatted_text_runs(p, text)
         p.level = min(level, 8)
 
-def parse_markdown_to_slides(content: str, gemini_api_key: str = None, colab_mode: bool = False) -> List[Dict]:
+
+def parse_markdown_to_slides(content: str) -> List[Dict]:
     slides = []
     slide_contents = re.split(r"\n---\\n", content)
     for slide_content in slide_contents:
@@ -237,29 +236,40 @@ def parse_markdown_to_slides(content: str, gemini_api_key: str = None, colab_mod
                 )
                 line_idx += 1
                 continue
-            
+
             # Handle Z-Image-Turbo integration
             if stripped.startswith("::: generate_infograph"):
                 infograph_prompt_lines = []
-                line_idx += 1 # Move past the '::: generate_infograph' line
+                line_idx += 1  # Move past the '::: generate_infograph' line
                 while line_idx < len(lines) and not lines[line_idx].strip() == ":::":
                     infograph_prompt_lines.append(lines[line_idx])
                     line_idx += 1
                 infograph_prompt = "\n".join(infograph_prompt_lines).strip()
-                
+
                 if infograph_prompt:
-                    logging.info(f"Generating Z-Image-Turbo image for prompt: {infograph_prompt}")
-                    image_path = generate_image_turbo(infograph_prompt, gemini_api_key, colab_mode)
+                    logging.info(
+                        f"Generating Z-Image-Turbo image for prompt: {infograph_prompt}"
+                    )
+                    image_path = generate_image_turbo(infograph_prompt)
                     if not image_path.startswith("Error"):
-                        curr.append({"type": "image", "content": f"![Infographic]({image_path})"})
+                        curr.append(
+                            {
+                                "type": "image",
+                                "content": f"![Infographic]({image_path})",
+                            }
+                        )
                     else:
                         logging.error(f"Failed to generate Z-Image-Turbo: {image_path}")
-                        curr.append({"type": "text", "content": f"ERROR: Could not generate infographic: {image_path}"})
+                        curr.append(
+                            {
+                                "type": "text",
+                                "content": f"ERROR: Could not generate infographic: {image_path}",
+                            }
+                        )
                 else:
                     logging.warning("Empty infograph prompt found.")
-                line_idx += 1 # Move past the ':::' line
+                line_idx += 1  # Move past the ':::' line
                 continue
-
 
             if re.match(r"^\s*!\[.*\]\(.*\\)\s*$", line):
                 curr.append({"type": "image", "content": line.strip()})
@@ -299,6 +309,7 @@ def parse_markdown_to_slides(content: str, gemini_api_key: str = None, colab_mod
         slides.append(slide_data)
     return slides
 
+
 def render_mermaid_diagram(mermaid_code: str, output_path: str):
     """Renders a Mermaid diagram using the Kroki.io service."""
     try:
@@ -310,7 +321,7 @@ def render_mermaid_diagram(mermaid_code: str, output_path: str):
 
         with httpx.Client() as client:
             response = client.get(kroki_url)
-            response.raise_for_status() # Raise an exception for bad status codes
+            response.raise_for_status()  # Raise an exception for bad status codes
 
             with open(output_path, "wb") as f:
                 f.write(response.content)
@@ -332,6 +343,7 @@ def render_mermaid_diagram(mermaid_code: str, output_path: str):
         except Exception as img_e:
             logging.error(f"Failed to create placeholder image: {img_e}")
         return False
+
 
 def preprocess_markdown_for_diagrams(markdown_content: str) -> str:
     """
@@ -361,8 +373,12 @@ def preprocess_markdown_for_diagrams(markdown_content: str) -> str:
 
     return modified_content
 
+
 def create_presentation_from_markdown(
-    content: str, output_path: str = "output.pptx", gemini_api_key: str = None, colab_mode: bool = False
+    content: str,
+    output_path: str = "output.pptx",
+    gemini_api_key: str = None,
+    colab_mode: bool = False,
 ) -> str:
     content = preprocess_markdown_for_diagrams(content)
     prs = Presentation()
@@ -376,7 +392,7 @@ def create_presentation_from_markdown(
         "blank": prs.slide_layouts[6],
         "picture_and_caption": prs.slide_layouts[8],
     }
-    slides_data = parse_markdown_to_slides(content, gemini_api_key, colab_mode)
+    slides_data = parse_markdown_to_slides(content)
 
     for slide_data in slides_data:
         layout = layout_map.get(slide_data["layout"], layout_map["title_content"])
@@ -431,6 +447,7 @@ def generate_structured_markdown(text: str, api_key: str) -> str:
     except Exception as e:
         return f"Gemini API Error: {e}"
 
+
 def generate_gemini_response(
     text: str, api_key: str, config: Dict[str, str] | None = None
 ) -> str:
@@ -445,6 +462,7 @@ def generate_gemini_response(
         return response
     except Exception as e:
         return f"Gemini API Error: {e}"
+
 
 def generate_infographic_script(text: str, api_key: str):
     """"""
@@ -461,118 +479,99 @@ def generate_infographic_script(text: str, api_key: str):
     response = generate_gemini_response(PROMPT, api_key)
     return response.text
 
-def generate_image_turbo_local(prompt: str) -> str:
+
+# def generate_image_turbo_local(prompt: str) -> str:
+#     """
+#     Generates an image using the local Z-Image-Turbo model and saves it to a temporary file.
+#     Returns the file path.
+#     """
+#     try:
+#         # Use bfloat16 for optimal performance on supported GPUs if available, otherwise use float16 or float32
+#         if (
+#             torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8
+#         ):  # A100, H100, etc.
+#             dtype = torch.bfloat16
+#         else:
+#             dtype = torch.float16
+#
+#         pipe = ZImagePipeline.from_pretrained(
+#             "Tongyi-MAI/Z-Image-Turbo", torch_dtype=dtype
+#         )
+#         if torch.cuda.is_available():
+#             pipe = pipe.to("cuda")  # Move the pipeline to GPU if available
+#
+#         image = pipe(
+#             prompt=prompt,
+#             num_inference_steps=8,  # Recommended for Z-Image-Turbo
+#             guidance_scale=2.0,  # A lower guidance scale is often suitable for turbo models
+#         ).images[0]
+#
+#         # Save to a temporary file
+#         temp_file = tempfile.NamedTemporaryFile(
+#             delete=False, suffix=".png", prefix="z_image_turbo_"
+#         )
+#         image.save(temp_file.name)
+#         temp_file.close()
+#         return temp_file.name
+#     except Exception as e:
+#         logging.error(f"Error generating image with local Z-Image-Turbo: {e}")
+#         return f"Error generating image locally: {e}"
+
+
+def generate_image_pollinationsai(prompt: str) -> str:
     """
-    Generates an image using the local Z-Image-Turbo model and saves it to a temporary file.
-    Returns the file path.
+
+
+    Generates an image using the Pollinations.AI API and returns the image URL.
+
+
     """
+
+    from urllib.parse import quote
+
+    encoded_prompt = quote(prompt)
+
+    url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+
     try:
-        # Use bfloat16 for optimal performance on supported GPUs if available, otherwise use float16 or float32
-        if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8: # A100, H100, etc.
-            dtype = torch.bfloat16
-        else:
-            dtype = torch.float16
+        response = httpx.get(url, follow_redirects=True)
 
-        pipe = ZImagePipeline.from_pretrained(
-            "Tongyi-MAI/Z-Image-Turbo",
-            torch_dtype=dtype
-        )
-        if torch.cuda.is_available():
-            pipe = pipe.to("cuda") # Move the pipeline to GPU if available
+        response.raise_for_status()
 
-        image = pipe(
-            prompt=prompt,
-            num_inference_steps=8, # Recommended for Z-Image-Turbo
-            guidance_scale=2.0,    # A lower guidance scale is often suitable for turbo models
-        ).images[0]
+        # The response content is the image itself, so we return the URL
 
-        # Save to a temporary file
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png", prefix="z_image_turbo_")
-        image.save(temp_file.name)
-        temp_file.close()
-        return temp_file.name
+        # We need to save the image to a temporary file to be used in the presentation
+
+        with tempfile.NamedTemporaryFile(
+            delete=False, suffix=".png", prefix="pollinations_"
+        ) as temp_file:
+            temp_file.write(response.content)
+
+            return temp_file.name
+
+    except httpx.HTTPStatusError as e:
+        logging.error(f"Error generating image with Pollinations.AI: {e}")
+
+        return f"Error: {e}"
+
     except Exception as e:
-        logging.error(f"Error generating image with local Z-Image-Turbo: {e}")
-        return f"Error generating image locally: {e}"
+        logging.error(f"An unexpected error occurred: {e}")
+
+        return f"Error: {e}"
 
 
-# generic asynico flow
-def generate_image_turbo(text: str, api_key: str, colab_mode: bool = False):
-    import requests
+# generic async flow
 
-    Z_IMAGE_PROMPT = generate_infographic_script(text, api_key)
 
-    if colab_mode:
-        logging.info("Generating image using local Z-Image-Turbo model...")
-        image_path = generate_image_turbo_local(Z_IMAGE_PROMPT)
-        return image_path
-    else:
-        # --- CONFIGURATION ---
-        API_ENDPOINT = "https://api-inference.modelscope.cn/v1/images/generations"
-        STATUS_ENDPOINT = "https://api-inference.modelscope.cn/v1/tasks"
-        TOKEN = "ms-c3e9e804-9a9e-4b42-b700-86d1118a2fa4"  # Replace with your actual token
-        HEADERS = {
-            "Authorization": f"Bearer {TOKEN}",
-            "Content-Type": "application/json",
-            "X-ModelScope-Async-Mode": "true",
-        }
+def generate_image_turbo(text: str):
+    Z_IMAGE_PROMPT = text  # The text is already the prompt
 
-        PAYLOAD = {
-            "model": "Tongyi-MAI/Z-Image-Turbo",
-            "prompt": Z_IMAGE_PROMPT,
-            "size": "1024*1024",
-            "n": 1,
-            "num_inference_steps": 9,  # Optimal step count for Turbo
-        }
+    logging.info("Generating image using Pollinations.AI...")
 
-        # --- STEP 1: Submit Task ---
-        print("Submitting Z-Image-Turbo task...")
-        try:
-            response = requests.post(
-                API_ENDPOINT, headers=HEADERS, data=json.dumps(PAYLOAD)
-            )
-            response.raise_for_status()  # Raise an exception for bad status codes
+    image_path = generate_image_pollinationsai(Z_IMAGE_PROMPT)
 
-            task_data = response.json()
-            task_id = task_data.get("data", {}).get("task_id")
+    return image_path
 
-            if not task_id:
-                print("Error: Could not retrieve task_id from submission response.")
-                print(task_data)
-                exit()
-
-            print(f"Task submitted successfully. Task ID: {task_id}")
-
-            # --- STEP 2: Poll for Results ---
-            print("Polling for result...")
-            status = "PROCESSING"
-
-            while status in ["PROCESSING", "IN_QUEUE"]:
-                time.sleep(5)  # Wait 5 seconds before polling again
-
-                status_response = requests.get(
-                    f"{STATUS_ENDPOINT}/{task_id}", headers=HEADERS
-                )
-                status_response.raise_for_status()
-                status_data = status_response.json()
-
-                status = status_data.get("data", {}).get("task_status")
-                print(f"Current Status: {status}")
-
-                if status == "COMPLETED":
-                    image_url = status_data.get("data", {}).get("output_urls", [None])[0]
-                    print("\n✅ Image Generation COMPLETED!")
-                    print(f"Generated Image URL: {image_url}")
-                    return image_url
-
-                elif status == "FAILED":
-                    print("\n❌ Image Generation FAILED.")
-                    print(status_data)
-                    return "Error: Image generation failed."
-
-        except requests.exceptions.RequestException as e:
-            print(f"An error occurred during API communication: {e}")
-            return f"Error: An error occurred during API communication: {e}"
 
 def generate_podcast_script(
     raw_text: str, api_key: str, prompt: str = ""
@@ -627,9 +626,10 @@ def generate_podcast_script(
 #     return [
 #         {
 #             "speaker": "Error",
-            "text": f"Could not generate podcast script. An unexpected error occurred: {e}",
+#            "text": f"Could not generate podcast script. An unexpected error occurred: {e}",
 #         }
 #     ]
+
 
 def generate_audio_overview(
     script: List[Dict], output_path: str, api_key: str, voice_mapping: Dict[str, str]
@@ -686,6 +686,7 @@ def generate_audio_overview(
         f.write(full_audio)
     return True
 
+
 def extract_content_with_docling(
     file_path: str, enabled_ocr=True, page_range: str = None
 ):
@@ -735,6 +736,7 @@ def extract_content_with_docling(
         print(f"Error extracting content with docling from {file_path}: {e}")
         return {"error": str(e)}
 
+
 def time_to_seconds(time_str):
     """Converts a time string of the format M:S or H:M:S to seconds."""
     if not time_str:
@@ -745,6 +747,7 @@ def time_to_seconds(time_str):
     elif len(parts) == 3:
         return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
     return 0
+
 
 def extract_content_from_youtube(url: str, start_time: str, end_time: str):
     """

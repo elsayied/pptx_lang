@@ -2,25 +2,16 @@
 import json
 import os
 import tempfile
-
 import time
+
 import httpx
 import streamlit as st
 
+from gemini_file_search_page import file_search_page
+
 # Import core backend functions
-from pptx_utils import (
-    DOCLING_AVAILABLE,
-    create_presentation_from_markdown,
-    extract_content_from_youtube,
-    extract_content_with_docling,
-    generate_audio_overview,
-    generate_podcast_script,
-    generate_structured_markdown,
-)
+from pptx_utils import *
 from settings_page import settings_page
-from rag import answer_question_with_rag, convert_qa_to_anki, upload_to_file_search_store
-from textcomplete import textcomplete, StrategyProps
-from fuzzy_search import find_medical_term
 
 
 # --- Session State ---
@@ -67,7 +58,7 @@ def load_api_keys():
 def import_file_content(uploaded_files, page_range):
     if not uploaded_files:
         return
-    
+
     all_content = []
     for uploaded_file in uploaded_files:
         suffix = os.path.splitext(uploaded_file.name)[1] or ".tmp"
@@ -79,13 +70,17 @@ def import_file_content(uploaded_files, page_range):
                 uploaded_file.seek(0)
                 with open(temp_path, "wb") as f:
                     f.write(uploaded_file.read())
-                ocr_enabled = st.session_state.get("ocr_enabled", True)  # Get OCR setting
+                ocr_enabled = st.session_state.get(
+                    "ocr_enabled", True
+                )  # Get OCR setting
                 content = extract_content_with_docling(
                     temp_path, page_range=page_range, enabled_ocr=ocr_enabled
                 )
 
                 if isinstance(content, dict) and "error" in content:
-                    st.error(f"Failed to extract content from {uploaded_file.name}: {content['error']}")
+                    st.error(
+                        f"Failed to extract content from {uploaded_file.name}: {content['error']}"
+                    )
                 elif content:
                     all_content.append(content)
                 else:
@@ -171,7 +166,7 @@ def generate_audio_overview_logic():
     voice_mapping = st.session_state.get("voice_mapping")
     tts_engine = st.session_state.get("tts_engine", "Eleven Labs")
     podcast_prompt: str = st.session_state.get("podcast_prompt")
-    
+
     if not raw:
         st.error("No content.")
         return
@@ -258,100 +253,16 @@ def main_app_ui():
     st.title("📄 Gemini-Powered Presentation Generator")
 
     st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go to", ["Create Presentation", "RAG Q&A", "App Settings"])
+    page = st.sidebar.radio(
+        "Go to", ["Create Presentation", "Gemini File Search", "App Settings"]
+    )
 
     if page == "Create Presentation":
         app_page()
-    elif page == "RAG Q&A":
-        rag_page()
+    elif page == "Gemini File Search":
+        file_search_page()
     elif page == "App Settings":
         settings_page()
-
-
-from rag import answer_question_with_rag, convert_qa_to_anki, upload_to_file_search_store
-from streamlit_searchbox import st_searchbox
-from fuzzy_search import find_medical_term
-
-def rag_page():
-    st.header("❓ RAG Q&A")
-    st.markdown("Upload a document, ask a question, and get an answer from it. Then export to Anki.")
-
-    gemini_api_key = st.text_input(
-        "Gemini API Key",
-        value=st.session_state.get("gemini_api_key", ""),
-        type="password",
-    )
-
-    uploaded_file = st.file_uploader("Upload a document for context", type=["txt", "pdf", "md"])
-
-    if uploaded_file and not st.session_state.get("file_search_store_name"):
-        if st.button("Process Document"):
-            if not gemini_api_key:
-                st.error("Please enter your Gemini API key.")
-                return
-
-            with st.spinner("Processing document and creating file search store..."):
-                with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp:
-                    tmp.write(uploaded_file.getvalue())
-                    file_path = tmp.name
-                
-                display_name = f"rag_store_{int(time.time())}"
-                store_name = upload_to_file_search_store(file_path, gemini_api_key, display_name)
-                os.unlink(file_path)
-
-                if "error" in store_name:
-                    st.error(store_name)
-                else:
-                    st.session_state["file_search_store_name"] = store_name
-                    st.success(f"Document processed. File search store created: {store_name}")
-    
-    if "conversation_history" not in st.session_state:
-        st.session_state.conversation_history = []
-
-    if st.session_state.get("file_search_store_name"):
-        st.markdown("---")
-        st.markdown("### Search for a medical term")
-        st.info("Use the search box below to find the correct spelling of a medical term. You can then copy and paste it into your question.")
-        selected_medical_term = st_searchbox(
-            find_medical_term,
-            key="medical_term_search",
-        )
-
-        st.markdown("---")
-        # Display conversation history
-        for message in st.session_state.conversation_history:
-            st.write(message)
-
-        question = st.text_area("Enter your question", key="question")
-
-        if st.button("Get Answer"):
-            if not gemini_api_key:
-                st.error("Please enter your Gemini API key.")
-                return
-            if not st.session_state.question:
-                st.error("Please enter a question.")
-                return
-
-            with st.spinner("Searching the document and generating an answer..."):
-                answer = answer_question_with_rag(st.session_state.question, gemini_api_key, st.session_state.file_search_store_name, st.session_state.conversation_history)
-                st.session_state["answer"] = answer
-                st.session_state.conversation_history.append(f"You: {st.session_state.question}")
-                st.session_state.conversation_history.append(f"Bot: {answer}")
-
-
-    if st.session_state.get("qa_pairs"):
-        st.markdown("### Anki Deck")
-        for i, pair in enumerate(st.session_state.qa_pairs):
-            st.write(f"**Q{i+1}:** {pair['question']}")
-            st.write(f"**A{i+1}:** {pair['answer']}")
-            st.markdown("---")
-
-        anki_data = convert_qa_to_anki(st.session_state.qa_pairs)
-        st.download_button(
-            "Download Anki Deck (.csv)",
-            anki_data,
-            "anki_deck.csv",
-        )
 
 
 def app_page():
@@ -363,7 +274,9 @@ def app_page():
     col1, col2 = st.columns([3, 1])
     with col1:
         file_ups = st.file_uploader(
-            "Upload a document (PDF, DOCX, TXT)", type=["pdf", "docx", "txt"], accept_multiple_files=True
+            "Upload a document (PDF, DOCX, TXT)",
+            type=["pdf", "docx", "txt"],
+            accept_multiple_files=True,
         )
     with col2:
         page_range_input = st.text_input(
@@ -460,8 +373,9 @@ def app_page():
     if st.button("Generate PPTX"):
         out = tempfile.NamedTemporaryFile(delete=False, suffix=".pptx").name
         api_key = st.session_state.get("gemini_api_key")
-        colab_mode = st.session_state.get("colab_mode", False)
-        create_presentation_from_markdown(st.session_state["markdown_editor"], out, api_key, colab_mode)
+        create_presentation_from_markdown(
+            st.session_state["markdown_editor"], out, api_key
+        )
         with open(out, "rb") as f:
             st.download_button("Download", f.read(), "presentation.pptx")
 

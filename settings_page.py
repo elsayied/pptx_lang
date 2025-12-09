@@ -145,10 +145,4 @@ Text:
     )
     st.session_state["podcast_prompt"] = podcast_prompt
 
-    st.subheader("Image Generation Settings")
-    colab_mode = st.checkbox(
-        "Enable Colab mode for local image generation",
-        value=st.session_state.get("colab_mode", False),
-        help="If enabled, the app will try to use a local model for image generation. This is intended for use in a Colab environment."
-    )
-    st.session_state["colab_mode"] = colab_mode
+
