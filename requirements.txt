@@ -2,7 +2,7 @@ streamlit
 httpx
 nest-asyncio
 elevenlabs
-google-generativeai
+google-genai
 python-pptx
 youtube-transcript-api
 numpy
@@ -17,5 +17,3 @@ torch
 diffusers
 transformers
 accelerate
-chromadb
-sentence-transformers
