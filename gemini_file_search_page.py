@@ -1,7 +1,7 @@
 import os
 import tempfile
 
-import google.generativeai as genai
+from google import genai
 import streamlit as st
 
 
